@@ -1,8 +1,34 @@
 # htop 中文化（htop-zh）
 
+[![build-and-publish](https://github.com/jj11510163-hash/htop-zh/actions/workflows/release.yml/badge.svg)](https://github.com/jj11510163-hash/htop-zh/actions/workflows/release.yml)
+
 给 [htop](https://github.com/htop-dev/htop) 3.4.1 的界面加上简体中文，并解决中文宽字符（一个汉字占 2 个终端列）导致的表格错位问题。
 
 > 上游 htop 没有 gettext / 多语言机制（[htop-dev/htop#966](https://github.com/htop-dev/htop/issues/966) 至今 open），界面文字全部硬编码在 C 源码里，所以只能通过补丁实现。
+
+## 安装
+
+### APT 源（Debian / Ubuntu）
+
+```bash
+echo "deb [trusted=yes] https://jj11510163-hash.github.io/htop-zh/ ./" | sudo tee /etc/apt/sources.list.d/htop-zh.list
+sudo apt update
+sudo apt install htop-zh
+HTOP_LANG=zh htop-zh
+```
+
+### 下载 .deb 直接安装
+
+```bash
+sudo apt install ./htop-zh_3.4.1-1_amd64.deb
+```
+
+### 静态二进制
+
+```bash
+chmod +x htop-zh-3.4.1-x86_64-static
+sudo install -m 755 htop-zh-3.4.1-x86_64-static /usr/local/bin/htop-zh
+```
 
 ## 效果
 

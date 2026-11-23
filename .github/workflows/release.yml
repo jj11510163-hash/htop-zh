@@ -1,4 +1,4 @@
-name: build-static
+name: build-and-publish
 
 on:
   push:
@@ -9,26 +9,29 @@ on:
 permissions:
   contents: write
 
+env:
+  HTOP_VERSION: '3.4.1'
+
 jobs:
   build:
     runs-on: ubuntu-latest
     container: alpine:3.20
     steps:
+      - uses: actions/checkout@v4
+
       - name: 安装构建依赖
         run: |
           apk add --no-cache build-base ncurses-dev ncurses-static \
             autoconf automake libtool pkgconf linux-headers curl tar
 
-      - uses: actions/checkout@v4
-
       - name: 下载 htop 源码并打补丁
         run: |
           curl -fsSL -o /tmp/htop.tar.gz \
-            https://codeload.github.com/htop-dev/htop/tar.gz/refs/tags/3.4.1
+            "https://codeload.github.com/htop-dev/htop/tar.gz/refs/tags/${HTOP_VERSION}"
           mkdir -p /tmp/src
           tar xzf /tmp/htop.tar.gz -C /tmp/src --strip-components=1
           cd /tmp/src
-          patch -p1 < "$GITHUB_WORKSPACE/patch/htop-3.4.1-zh.patch"
+          patch -p1 < "$GITHUB_WORKSPACE/patch/htop-${HTOP_VERSION}-zh.patch"
 
       - name: 静态编译
         run: |
@@ -37,25 +40,103 @@ jobs:
           ./configure --enable-unicode LDFLAGS=-static
           make -j"$(nproc)"
           strip htop
-          cp htop "$GITHUB_WORKSPACE/htop-zh-3.4.1-x86_64-static"
-          "$GITHUB_WORKSPACE/htop-zh-3.4.1-x86_64-static" --version
+          cp htop "$GITHUB_WORKSPACE/htop-zh-${HTOP_VERSION}-x86_64-static"
+          "$GITHUB_WORKSPACE/htop-zh-${HTOP_VERSION}-x86_64-static" --version
 
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: htop-zh-static
-          path: htop-zh-3.4.1-x86_64-static
+          path: htop-zh-*-x86_64-static
 
-      - name: 发布 Release（仅在打 tag 时）
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: htop-zh-static
+          path: dist
+
+      - name: 构建 .deb 与 APT 索引
+        run: |
+          set -e
+          BIN=$(find dist -name 'htop-zh-*-static' | head -1)
+          chmod +x "$BIN"
+          VER="${HTOP_VERSION}-${GITHUB_RUN_NUMBER}"
+
+          mkdir -p apt/usr/bin apt/DEBIAN
+          install -m 755 "$BIN" apt/usr/bin/htop-zh
+          sed "s/^Version: .*/Version: $VER/" packaging/control > apt/DEBIAN/control
+          chmod 644 apt/DEBIAN/control
+
+          DEB="htop-zh_${VER}_amd64.deb"
+          dpkg-deb --build --root-owner-group apt "$DEB"
+          dpkg-deb -c "$DEB"
+
+          mkdir -p repo
+          mv "$DEB" repo/
+          cp "$BIN" repo/
+
+          cd repo
+          {
+            echo "Package: htop-zh"
+            echo "Version: $VER"
+            echo "Architecture: amd64"
+            echo "Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>"
+            echo "Installed-Size: 556"
+            echo "Depends:"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Filename: ./$DEB"
+            echo "Size: $(stat -c%s "$DEB")"
+            echo "SHA256: $(sha256sum "$DEB" | cut -d' ' -f1)"
+            echo "Description: htop with Simplified Chinese user interface"
+            echo " htop ${HTOP_VERSION} patched with a Simplified Chinese interface, covering"
+            echo " the main screen, the help page, the setup screens and the common dialogs."
+            echo " ."
+            echo " The included binary is statically linked (musl) and needs no runtime"
+            echo " dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the"
+            echo " Chinese interface, HTOP_LANG=en keeps the original English UI."
+          } > Packages
+          gzip -kf Packages
+          touch .nojekyll
+          ls -l
+
+      - name: 发布到 gh-pages（APT 源）
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./repo
+          publish_branch: gh-pages
+          force_orphan: true
+
+      - name: 发布 Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: htop-zh-3.4.1-x86_64-static
+          files: |
+            repo/htop-zh_*_amd64.deb
+            repo/htop-zh-*-x86_64-static
           body: |
-            htop 3.4.1 中文化版本（x86_64 Linux 静态二进制）。
+            htop ${{ env.HTOP_VERSION }} 中文化版本。
+
+            ## 方式一：APT 安装（推荐）
 
             ```bash
-            chmod +x htop-zh-3.4.1-x86_64-static
-            sudo install -m 755 htop-zh-3.4.1-x86_64-static /usr/local/bin/htop-zh
-            HTOP_LANG=zh htop-zh
+            echo "deb [trusted=yes] https://jj11510163-hash.github.io/htop-zh/ ./" | sudo tee /etc/apt/sources.list.d/htop-zh.list
+            sudo apt update
+            sudo apt install htop-zh
             ```
+
+            ## 方式二：下载安装
+
+            ```bash
+            sudo apt install ./htop-zh_*_amd64.deb
+            # 或直接跑静态二进制
+            chmod +x htop-zh-*-x86_64-static
+            sudo install -m 755 htop-zh-*-x86_64-static /usr/local/bin/htop-zh
+            ```
+
+            运行：`HTOP_LANG=zh htop-zh`

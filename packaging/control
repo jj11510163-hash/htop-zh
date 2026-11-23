@@ -1,0 +1,15 @@
+Package: htop-zh
+Version: 3.4.1-1
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>
+Installed-Size: 556
+Depends:
+Description: htop with Simplified Chinese user interface
+ htop 3.4.1 patched with a Simplified Chinese interface, covering the
+ main screen, the help page, the setup screens and the common dialogs.
+ .
+ The included binary is statically linked (musl) and needs no runtime
+ dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the
+ Chinese interface, HTOP_LANG=en keeps the original English UI.
