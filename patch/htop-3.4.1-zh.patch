@@ -1,0 +1,2600 @@
+--- a/CRT.c
++++ b/CRT.c
+@@ -1,4 +1,4 @@
+-/*
++﻿/*
+ htop - CRT.c
+ (C) 2004-2011 Hisham H. Muhammad
+ Released under the GNU GPLv2+, see the COPYING file
+@@ -12,12 +12,14 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <langinfo.h>
++#include <locale.h>
+ #include <signal.h>
+ #include <stdarg.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
++#include <wchar.h>
+ 
+ #include "CommandLine.h"
+ #include "ProvideCurses.h"
+@@ -1376,4 +1378,509 @@
+       "!!! Chained handler did not exit. Forcing exit.\n"
+    );
+    _exit(1);
++}
++
++/*
++ * Chinese (zh_CN) localization layer.
++ *
++ * htop upstream has no gettext based translation support (see upstream issue
++ * https://github.com/htop-dev/htop/issues/966), the user interface strings are
++ * hard coded string literals. This small layer maps the original English
++ * strings used on the main screen to Chinese equivalents.
++ *
++ * Every translated string keeps the exact display width (number of terminal
++ * cells) of the original one, so the column layout of htop is preserved even
++ * for double width characters.
++ */
++
++static const struct {
++   const char* en;
++   const char* zh;
++} CRT_zhTable[] = {
++   /* F7/F8 priority actions on the main function bar */
++   { "Nice -", "升优先" },
++   { "Nice +", "降优先" },
++
++   /* function bar labels of the main screen */
++   { "Setup",         "设置" },
++
++   /* function bar labels used by the setup panels */
++   { "Done",          "完成" },
++   { "Cancel",        "取消" },
++   { "Add",           "添加" },
++   { "Set",           "设置" },
++   { "Send",          "发送" },
++   { "Select",        "选择" },
++   { "Sort",          "排序" },
++   { "Show",          "显示" },
++   { "Up",            "上移" },
++   { "Down",          "下移" },
++   { "Left",          "左移" },
++   { "Right",         "右移" },
++   { "Next",          "下一个" },
++   { "Prev",          "上一个" },
++   { "Delete",        "删除" },
++   { "Move",          "移动" },
++   { "Rename",        "重命名" },
++   { "New",           "新建" },
++   { "Back",          "返回" },
++   { "Space",         "空格" },
++   { "Follow",        "跟随" },
++
++   /* setup panel labels: categories, panel headers and option items */
++   { "Categories",        "分类" },
++   { "Display options",   "显示选项" },
++   { "Header layout",     "顶部布局" },
++   { "Header Layout",     "顶部布局" },
++   { "Meters",            "仪表" },
++   { "Screen tabs",       "屏幕标签" },
++   { "Screens",           "屏幕" },
++   { "Colors",            "配色" },
++   { "Available meters",  "可用仪表" },
++   { "Available Columns", "可用列" },
++   { "Active Columns",    "活动列" },
++
++   /* display options page */
++   { "For current screen tab: ", "当前屏幕标签: " },
++   { "Tree view", "树视图" },
++   { "- Tree view is always sorted by PID (htop 2 behavior)", "- 树视图始终按 PID 排序(htop 2 行为)" },
++   { "- Tree view is collapsed by default", "- 默认折叠树视图" },
++   { "Global options:", "全局选项:" },
++   { "Show tabs for screens", "显示屏幕标签" },
++   { "Shadow other users' processes", "淡化其他用户的进程" },
++   { "Hide kernel threads", "隐藏内核线程" },
++   { "Hide userland process threads", "隐藏用户态线程" },
++   { "Hide processes running in containers", "隐藏容器内进程" },
++   { "Display threads in a different color", "线程用不同颜色显示" },
++   { "Show custom thread names", "显示自定义线程名" },
++   { "Show program path", "显示程序完整路径" },
++   { "Highlight program \"basename\"", "高亮程序名(basename)" },
++   { "Highlight out-dated/removed programs (red) / libraries (yellow)", "高亮已删除程序(红)/库(黄)" },
++   { "Shadow distribution path prefixes", "淡化发行版路径前缀" },
++   { "Merge exe, comm and cmdline in Command", "命令列合并 exe/comm/cmdline" },
++   { "- Try to find comm in cmdline (when Command is merged)", "- 尝试从 cmdline 提取 comm" },
++   { "- Try to strip exe from cmdline (when Command is merged)", "- 尝试从 cmdline 去掉 exe" },
++   { "Highlight large numbers in memory counters", "高亮内存计数中的大数字" },
++   { "Leave a margin around header", "顶部仪表区留边距" },
++   { "Detailed CPU time (System/IO-Wait/Hard-IRQ/Soft-IRQ/Steal/Guest)", "详细 CPU 时间(系统/IO等待/硬中断/软中断/抢占/客户)" },
++   { "Count CPUs from 1 instead of 0", "CPU 编号从 1 开始" },
++   { "Update process names on every refresh", "每次刷新都更新进程名" },
++   { "Add guest time in CPU meter percentage", "CPU 占用含客户机时间" },
++   { "Also show CPU percentage numerically", "同时用数值显示 CPU 占用" },
++   { "Also show CPU frequency", "同时显示 CPU 频率" },
++   { "Also show CPU temperature (requires libsensors)", "同时显示 CPU 温度(需 libsensors)" },
++   { "Also show CPU temperature", "同时显示 CPU 温度" },
++   { "- Show temperature in degree Fahrenheit instead of Celsius", "- 温度用华氏度显示" },
++   { "Show cached memory in graph and bar modes", "图形/柱状模式显示缓存内存" },
++   { "Enable the mouse", "启用鼠标" },
++   { "Update interval (in seconds)", "刷新间隔(秒)" },
++   { "Highlight new and old processes", "高亮新增/消失的进程" },
++   { "- Highlight time (in seconds)", "- 高亮持续时间(秒)" },
++   { "Hide main function bar (0 - off, 1 - on ESC until next input, 2 - permanently)", "隐藏底部功能键栏(0关/1按ESC/2永久)" },
++
++   /* header layout presets */
++   { "1 column  - full width", "1 列 - 全宽" },
++   { "2 columns - 50/50 (default)", "2 列 - 50/50 (默认)" },
++   { "2 columns - 33/67", "2 列 - 33/67" },
++   { "2 columns - 67/33", "2 列 - 67/33" },
++   { "3 columns - 33/34/33", "3 列 - 33/34/33" },
++   { "3 columns - 25/25/50", "3 列 - 25/25/50" },
++   { "3 columns - 25/50/25", "3 列 - 25/50/25" },
++   { "3 columns - 50/25/25", "3 列 - 50/25/25" },
++   { "3 columns - 40/30/30", "3 列 - 40/30/30" },
++   { "3 columns - 30/40/30", "3 列 - 30/40/30" },
++   { "3 columns - 30/30/40", "3 列 - 30/30/40" },
++   { "3 columns - 40/20/40", "3 列 - 40/20/40" },
++   { "4 columns - 25/25/25/25", "4 列 - 25/25/25/25" },
++
++   /* color schemes */
++   { "MC",             "午夜指挥官" },
++   { "Default",        "默认" },
++   { "Monochromatic",  "单色" },
++   { "Black on White", "白底黑字" },
++   { "Light Terminal", "浅色终端" },
++   { "Black Night",    "黑夜" },
++   { "Broken Gray",    "灰阶" },
++
++   /* function keys of the meters/screens panels */
++   { "Style",  "样式" },
++   { "Lock",   "锁定" },
++   { "MoveUp", "上移" },
++   { "MoveDn", "下移" },
++   { "Remove", "移除" },
++   { "Inc",    "增加" },
++   { "Dec",    "减少" },
++
++   /* meter names and styles */
++   { "Bar",        "柱状" },
++   { "Text",       "文本" },
++   { "Graph",      "曲线" },
++   { "Memory",     "内存" },
++   { "Swap",       "交换" },
++   { "Memory & Swap", "内存与交换" },
++   { "CPU average",   "CPU 平均" },
++   { "Task counter",  "任务计数" },
++   { "Load average",  "负载均值" },
++   { "Load",          "负载" },
++   { "Uptime",        "运行时间" },
++   { "Clock",         "时钟" },
++   { "Date",          "日期" },
++   { "Date and Time", "日期与时间" },
++   { "Hostname",      "主机名" },
++   { "Battery",       "电池" },
++   { "Network IO",    "网络 IO" },
++   { "Disk IO",       "磁盘 IO" },
++   { "System",        "系统" },
++   { "HugePages",     "大页" },
++   { "GPU usage",     "GPU 占用" },
++   { "File Descriptors", "文件描述符" },
++   { "Systemd state", "Systemd 状态" },
++   { "Systemd user state", "Systemd 用户状态" },
++   { "ZFS ARC",       "ZFS ARC" },
++   { "ZFS CARC",      "ZFS CARC" },
++   { "Blank",         "空白" },
++
++   /* F1 help screen */
++   { "Released under the GNU GPLv2+. See 'man' page for more info.", "基于 GNU GPLv2+ 发布，详见 man 手册。" },
++   { "CPU usage bar: ", "CPU 使用条: " },
++   { "Memory bar:    ", "内存条:       " },
++   { "Swap bar:      ", "交换条:       " },
++   { "Type and layout of header meters are configurable in the setup screen.", "顶部仪表的类型与布局可在设置界面中配置。" },
++   { "In monochrome, meters display as different chars, in order: |#*@$%&.", "单色模式下仪表用不同字符显示，依次为: |#*@$%&。" },
++   { "Process state: ", "进程状态: " },
++   { "Press any key to return.", "按任意键返回。" },
++   { "running; ", "运行中; " },
++   { "sleeping; ", "睡眠; " },
++   { "traced/stopped; ", "跟踪/停止; " },
++   { "zombie; ", "僵尸; " },
++   { "disk sleep", "磁盘睡眠" },
++   { "low", "低优先级" },
++   { "normal", "普通" },
++   { "kernel", "内核" },
++   { "irq", "硬中断" },
++   { "soft-irq", "软中断" },
++   { "steal", "抢占" },
++   { "guest", "客户" },
++   { "io-wait", "IO等待" },
++   { "used%", "已用%" },
++   { "used", "已用" },
++   { "shared", "共享" },
++   { "compressed", "压缩" },
++   { "buffers", "缓冲" },
++   { "cache", "缓存" },
++   { "total", "总量" },
++   { "frontswap", "前端交换" },
++   { "threads", "线程" },
++   { "hide/show header meters", "显示/隐藏顶部仪表" },
++   { "switch to next screen tab", "下一个屏幕标签" },
++   { "scroll process list", "滚动进程列表" },
++   { "incremental PID search", "按 PID 增量查找" },
++   { "incremental name search", "按名称增量搜索" },
++   { "incremental name filtering", "按名称增量过滤" },
++   { "tree view", "树形视图" },
++   { "toggle program path", "切换程序完整路径" },
++   { "toggle merged command", "切换命令列合并" },
++   { "pause/resume process updates", "暂停/恢复刷新" },
++   { "show processes of a single user", "只看某用户的进程" },
++   { "hide/show user process threads", "显示/隐藏用户态线程" },
++   { "hide/show kernel threads", "显示/隐藏内核线程" },
++   { "hide/show processes in containers", "显示/隐藏容器内进程" },
++   { "cursor follows process", "光标跟随进程" },
++   { "expand/collapse tree/toggle all", "展开/折叠树/全部切换" },
++   { "sort by PID, CPU%, MEM% or TIME", "按 PID/CPU%/MEM%/TIME 排序" },
++   { "invert sort order", "反转排序方向" },
++   { "select sort column", "选择排序列" },
++   { "switch to previous screen tab", "上一个屏幕标签" },
++   { "tag process", "标记进程" },
++   { "tag process and its children", "标记进程及子进程" },
++   { "untag all processes", "取消所有标记" },
++   { "kill process/tagged processes", "结束进程/已标记进程" },
++   { "higher priority (root only)", "提高优先级(仅 root)" },
++   { "lower priority (+ nice)", "降低优先级(+ nice)" },
++   { "set CPU affinity", "设置 CPU 亲和性" },
++   { "show process environment", "查看进程环境变量" },
++   { "set IO priority", "设置 IO 优先级" },
++   { "list open files with lsof", "用 lsof 列出打开文件" },
++   { "list file locks of process", "列出进程的文件锁" },
++   { "trace syscalls with strace", "用 strace 跟踪系统调用" },
++   { "wrap process command in multiple lines", "命令列多行显示" },
++   { "set scheduling policy", "设置调度策略" },
++   { "setup", "设置" },
++   { "show this help screen", "显示本帮助" },
++   { "quit", "退出" },
++
++   /* dialogs: users, signals, priority, affinity, trace and info screens */
++   { "Sort by", "排序方式" },
++   { "Sending...", "正在发送..." },
++   { "Show processes of:", "显示以下用户的进程:" },
++   { "All users", "所有用户" },
++   { "Send signal:", "发送信号:" },
++   { "Priority:", "优先级:" },
++   { "New policy:", "新策略:" },
++   { "Batch", "批处理" },
++   { "RoundRobin", "轮转" },
++   { "Other", "其他" },
++   { "Reset on fork: on", "fork 后重置: 开" },
++   { "Reset on fork: off", "fork 后重置: 关" },
++   { "Use CPUs:", "使用 CPU:" },
++   { "Topology", "拓扑" },
++   { "Collapse/Expand", "折叠/展开" },
++   { "AutoScroll", "自动滚动" },
++   { "Resume Tracing", "继续跟踪" },
++   { "Stop Tracing", "停止跟踪" },
++   { "Refresh", "刷新" },
++   { "Processes", "进程" },
++   { "Trace of process %d - %s", "进程 %d 的跟踪 - %s" },
++   { "Snapshot of files open in process %d - %s", "进程 %d 的打开文件 - %s" },
++   { "Snapshot of file locks of process %d - %s", "进程 %d 的文件锁 - %s" },
++   { "Could not determine file locks.", "无法获取文件锁信息。" },
++   { "No locks have been found for the selected process.", "所选进程没有文件锁。" },
++   { "Could not execute 'lsof'. Please make sure it is available in your $PATH.", "无法执行 lsof，请确认它在 $PATH 中。" },
++   { "Could not execute 'strace'. Please make sure it is available in your $PATH.", "无法执行 strace，请确认它在 $PATH 中。" },
++   { "Failed listing open files.", "列出打开文件失败。" },
++   { "This feature is not supported on your platform.", "当前平台不支持该功能。" },
++
++   /* process list column titles - padded to the original width */
++   { "USER       ",   "用户名     " },   /* 11 cells */
++   { " VIRT ",        " 虚拟 " },       /* 6 cells */
++   { "  RES ",        " 常驻 " },       /* 6 cells */
++   { "  SHR ",        " 共享 " },       /* 6 cells */
++   { "Command ",      "命令    " },     /* 8 cells */
++   { "  TIME+  ",     " 时间+  " },     /* 9 cells */
++
++   /* meter captions */
++   { "Mem",           "内存" },
++   { "Swp",           "交换" },
++   { "M&S",           "内存/交换" },
++   { "Tasks: ",       "任务: " },
++   { "Load average: ", "负载均值: " },
++   { "Load: ",        "负载: " },
++   { "Uptime: ",      "运行: " },
++   { "Time: ",        "时间: " },
++   { "Hostname: ",    "主机名: " },
++   { "Battery: ",     "电池: " },
++   { "Network: ",     "网络: " },
++   { "Disk IO: ",     "磁盘IO: " },
++   { "FDs: ",         "句柄: " },
++   { "System: ",      "系统: " },
++   { "Date: ",        "日期: " },
++   { "Date & Time: ", "日期时间: " },
++
++   /* task counter suffixes */
++   { " thr",          " 线程" },
++   { " kthr",         " 内核线程" },
++   { "; ",            "；" },
++   { " running",      " 运行中" },
++
++   /* function bar labels */
++   { "Help  ",        "帮助  " },
++   { "Setup ",        "设置  " },
++   { "Search",        "搜索  " },
++   { "Filter",        "筛选  " },
++   { "Tree  ",        "树形  " },
++   { "List  ",        "列表  " },
++   { "SortBy",        "排序  " },
++   { "Kill  ",        "结束  " },
++   { "Quit  ",        "退出  " },
++   { "FILTER",        "筛选: " },
++   { "PAUSED",        "已暂停" },
++   { "Next  ",        "下一个" },
++   { "Prev   ",       "上一个 " },
++   { "Cancel ",       "取消   " },
++   { "Done  ",        "完成  " },
++   { "Clear ",        "清除   " },
++   { " Search: ",     " 搜索:  " },
++   { " Filter: ",     " 筛选:  " },
++};
++
++static bool CRT_i18nInitialized = false;
++static bool CRT_zhActive = false;
++
++static bool CRT_envWantsChinese(void) {
++   const char* env = getenv("HTOP_LANG");
++   if (env && *env) {
++      if (strstr(env, "zh") || strstr(env, "ZH") || strstr(env, "cn") || strstr(env, "CN"))
++         return true;
++      if (String_eq(env, "en") || String_eq(env, "C") || String_eq(env, "c"))
++         return false;
++   }
++
++   static const char* const vars[] = { "LC_ALL", "LC_CTYPE", "LANG", NULL };
++   for (int i = 0; vars[i]; i++) {
++      env = getenv(vars[i]);
++      if (!env || !*env)
++         continue;
++      if ((env[0] == 'z' && env[1] == 'h') || (env[0] == 'Z' && env[1] == 'H'))
++         return true;
++      break;
++   }
++
++   return false;
++}
++
++void CRT_i18nInit(void) {
++   if (CRT_i18nInitialized)
++      return;
++   CRT_i18nInitialized = true;
++
++   CRT_zhActive = CRT_envWantsChinese();
++   if (!CRT_zhActive)
++      return;
++
++   /* Double width characters require an UTF-8 locale to be rendered by ncurses */
++   if (!String_eq(nl_langinfo(CODESET), "UTF-8")) {
++      static const char* const candidates[] = { "C.UTF-8", "zh_CN.UTF-8", "en_US.UTF-8", NULL };
++      for (int i = 0; candidates[i]; i++) {
++         if (setlocale(LC_CTYPE, candidates[i]) && String_eq(nl_langinfo(CODESET), "UTF-8"))
++            break;
++      }
++      if (!String_eq(nl_langinfo(CODESET), "UTF-8"))
++         CRT_zhActive = false;
++   }
++}
++
++bool CRT_isChinese(void) {
++   if (!CRT_i18nInitialized)
++      CRT_i18nInit();
++   return CRT_zhActive;
++}
++
++int CRT_strWidth(const char* s) {
++   if (!s)
++      return 0;
++
++   if (!String_eq(nl_langinfo(CODESET), "UTF-8"))
++      return (int)strlen(s);
++
++   int width = 0;
++   mbstate_t state;
++   memset(&state, 0, sizeof(state));
++
++   while (*s) {
++      wchar_t wc;
++      size_t n = mbrtowc(&wc, s, MB_CUR_MAX, &state);
++      if (n == (size_t)-1 || n == (size_t)-2) {
++         width++;
++         s++;
++         memset(&state, 0, sizeof(state));
++         continue;
++      }
++      if (n == 0)
++         break;
++      int cw = wcwidth(wc);
++      width += cw > 0 ? cw : 1;
++      s += n;
++   }
++
++   return width;
++}
++
++const char* CRT_trans(const char* en) {
++   if (!en || !CRT_isChinese())
++      return en;
++
++   for (size_t i = 0; i < ARRAYSIZE(CRT_zhTable); i++) {
++      if (String_eq(CRT_zhTable[i].en, en))
++         return CRT_zhTable[i].zh;
++   }
++
++   return en;
++}
++
++/* Translate a fixed width function bar label, keeping the original width */
++const char* CRT_transPad(const char* label, int width) {
++   static char buffers[8][128];
++   static unsigned int next = 0;
++
++   if (!label || width <= 0 || !CRT_isChinese())
++      return label;
++
++   char key[64];
++   size_t len = strlen(label);
++   while (len > 0 && label[len - 1] == ' ')
++      len--;
++   if (len >= sizeof(key))
++      len = sizeof(key) - 1;
++   memcpy(key, label, len);
++   key[len] = '\0';
++
++   const char* zh = CRT_trans(key);
++   if (zh == key || String_eq(zh, key))
++      return label;
++
++   char* out = buffers[next++ & 7u];
++   int zhWidth = CRT_strWidth(zh);
++   if (zhWidth > width) {
++      const char* clipped = CRT_transClip(zh, width);
++      xSnprintf(out, sizeof(buffers[0]), "%s", clipped);
++      return out;
++   }
++
++   xSnprintf(out, sizeof(buffers[0]), "%s", zh);
++   size_t pos = strlen(out);
++   for (int i = zhWidth; i < width && pos + 1 < sizeof(buffers[0]); i++)
++      out[pos++] = ' ';
++   out[pos] = '\0';
++
++   return out;
++}
++
++const char* CRT_transClip(const char* s, int maxWidth) {
++   static char buffers[4][256];
++   static unsigned int next = 0;
++
++   char* out = buffers[next++ & 3u];
++   out[0] = '\0';
++
++   if (!s || maxWidth <= 0)
++      return out;
++
++   mbstate_t state;
++   memset(&state, 0, sizeof(state));
++   int width = 0;
++   size_t written = 0;
++
++   const char* p = s;
++   while (*p && written + 4 < sizeof(buffers[0])) {
++      wchar_t wc;
++      size_t n = mbrtowc(&wc, p, MB_CUR_MAX, &state);
++      if (n == (size_t)-1 || n == (size_t)-2) {
++         n = 1;
++         wc = (wchar_t)(unsigned char)*p;
++         memset(&state, 0, sizeof(state));
++      }
++      if (n == 0)
++         break;
++
++      int cw = wcwidth(wc);
++      if (cw < 0)
++         cw = 1;
++      if (width + cw > maxWidth)
++         break;
++
++      memcpy(out + written, p, n);
++      written += n;
++      out[written] = '\0';
++      width += cw;
++      p += n;
++   }
++
++   return out;
++}
++
++/* Translate a string ignoring its trailing padding spaces */
++const char* CRT_transTrim(const char* s) {
++   static char buffers[8][128];
++   static unsigned int next = 0;
++
++   if (!s)
++      return s;
++
++   char* out = buffers[next++ & 7u];
++   xSnprintf(out, sizeof(buffers[0]), "%s", s);
++   size_t len = strlen(out);
++   while (len > 0 && out[len - 1] == ' ')
++      out[--len] = '\0';
++
++   return CRT_trans(out);
+ }
+--- a/CRT.h
++++ b/CRT.h
+@@ -224,4 +224,13 @@
+ 
+ void CRT_setColors(int colorScheme);
+ 
++/* Chinese localization helpers, see CRT.c */
++void CRT_i18nInit(void);
++bool CRT_isChinese(void);
++const char* CRT_trans(const char* en);
++const char* CRT_transPad(const char* label, int width);
++const char* CRT_transTrim(const char* s);
++const char* CRT_transClip(const char* s, int maxWidth);
++int CRT_strWidth(const char* s);
++
+ #endif
+--- a/Row.c
++++ b/Row.c
+@@ -143,6 +143,13 @@
+    if (!title)
+       return "- ";
+ 
++   /* Chinese localized titles are pre-padded to the original display width */
++   const char* localized = CRT_trans(title);
++   if (localized != title) {
++      xSnprintf(titleBuffer, titleBufferSize, "%s", localized);
++      return titleBuffer;
++   }
++
+    if (Process_fields[field].pidColumn) {
+       xSnprintf(titleBuffer, titleBufferSize, "%*s ", Row_pidDigits, title);
+       return titleBuffer;
+@@ -181,7 +188,7 @@
+    RowField field;
+    int x = 0;
+    for (int i = 0; (field = fields[i]); i++) {
+-      int len = strlen(RowField_alignedTitle(settings, field));
++      int len = CRT_strWidth(RowField_alignedTitle(settings, field));
+       if (at >= x && at <= x + len) {
+          return field;
+       }
+--- a/Meter.c
++++ b/Meter.c
+@@ -54,7 +54,7 @@
+    mvaddnstr(y, x, caption, w);
+    attrset(CRT_colors[RESET_COLOR]);
+ 
+-   int captionLen = strlen(caption);
++   int captionLen = CRT_strWidth(caption);
+    x += captionLen;
+    w -= captionLen;
+    if (w <= 0)
+@@ -72,10 +72,10 @@
+ 
+ static void BarMeterMode_draw(Meter* this, int x, int y, int w) {
+    // Draw the caption
+-   const char* caption = Meter_getCaption(this);
++   const char* caption = CRT_transClip(Meter_getCaption(this), CRT_isChinese() ? 4 : 3);
+    attrset(CRT_colors[METER_TEXT]);
+-   int captionLen = 3;
+-   mvaddnstr(y, x, caption, captionLen);
++   int captionLen = CRT_strWidth(caption);
++   mvaddstr(y, x, caption);
+    x += captionLen;
+    w -= captionLen;
+ 
+@@ -191,10 +191,10 @@
+ 
+ static void GraphMeterMode_draw(Meter* this, int x, int y, int w) {
+    // Draw the caption
+-   const char* caption = Meter_getCaption(this);
++   const char* caption = CRT_transClip(Meter_getCaption(this), CRT_isChinese() ? 4 : 3);
+    attrset(CRT_colors[METER_TEXT]);
+-   const int captionLen = 3;
+-   mvaddnstr(y, x, caption, captionLen);
++   const int captionLen = CRT_strWidth(caption);
++   mvaddstr(y, x, caption);
+    x += captionLen;
+    w -= captionLen;
+ 
+@@ -319,7 +319,7 @@
+    attrset(CRT_colors[LED_COLOR]);
+    const char* caption = Meter_getCaption(this);
+    mvaddstr(yText, x, caption);
+-   int xx = x + strlen(caption);
++   int xx = x + CRT_strWidth(caption);
+    int len = RichString_sizeVal(out);
+    for (int i = 0; i < len; i++) {
+       int c = RichString_getCharVal(out, i);
+@@ -391,7 +391,7 @@
+    this->curAttributes = NULL;
+    this->values = type->maxItems ? xCalloc(type->maxItems, sizeof(double)) : NULL;
+    this->total = type->total;
+-   this->caption = xStrdup(type->caption);
++   this->caption = xStrdup(CRT_trans(type->caption));
+    if (Meter_initFn(this)) {
+       Meter_init(this);
+    }
+@@ -452,7 +452,7 @@
+ }
+ 
+ void Meter_setCaption(Meter* this, const char* caption) {
+-   free_and_xStrdup(&this->caption, caption);
++   free_and_xStrdup(&this->caption, CRT_trans(caption));
+ }
+ 
+ void Meter_setMode(Meter* this, MeterModeId modeIndex) {
+@@ -503,7 +503,7 @@
+ ListItem* Meter_toListItem(const Meter* this, bool moving) {
+    char mode[20];
+    if (this->mode > 0) {
+-      xSnprintf(mode, sizeof(mode), " [%s]", Meter_modes[this->mode].uiName);
++      xSnprintf(mode, sizeof(mode), " [%s]", CRT_trans(Meter_modes[this->mode].uiName));
+    } else {
+       mode[0] = '\0';
+    }
+@@ -511,7 +511,7 @@
+    if (Meter_getUiNameFn(this))
+       Meter_getUiName(this, name, sizeof(name));
+    else
+-      xSnprintf(name, sizeof(name), "%s", Meter_uiName(this));
++      xSnprintf(name, sizeof(name), "%s", CRT_trans(Meter_uiName(this)));
+    char buffer[50];
+    xSnprintf(buffer, sizeof(buffer), "%s%s", name, mode);
+    ListItem* li = ListItem_new(buffer, 0);
+--- a/FunctionBar.c
++++ b/FunctionBar.c
+@@ -41,7 +41,7 @@
+       functions = FunctionBar_FLabels;
+    }
+    for (int i = 0; i < FUNCTIONBAR_MAXEVENTS && functions[i]; i++) {
+-      this->functions[i] = xStrdup(functions[i]);
++      this->functions[i] = xStrdup(CRT_transPad(functions[i], (int)strlen(functions[i])));
+    }
+    if (keys && events) {
+       this->staticData = false;
+@@ -100,10 +100,10 @@
+    for (int i = 0; i < this->size; i++) {
+       attrset(CRT_colors[FUNCTION_KEY]);
+       mvaddstr(LINES - 1, x, this->keys.constKeys[i]);
+-      x += strlen(this->keys.constKeys[i]);
++      x += CRT_strWidth(this->keys.constKeys[i]);
+       attrset(CRT_colors[FUNCTION_BAR]);
+       mvaddstr(LINES - 1, x, this->functions[i]);
+-      x += strlen(this->functions[i]);
++      x += CRT_strWidth(this->functions[i]);
+    }
+ 
+    if (buffer) {
+@@ -113,7 +113,7 @@
+          attrset(attr);
+       }
+       mvaddstr(LINES - 1, x, buffer);
+-      x += strlen(buffer);
++      x += CRT_strWidth(buffer);
+       cursorX = x;
+    }
+ 
+@@ -139,14 +139,14 @@
+    mvaddstr(LINES - 1, currentLen + 1, buffer);
+    attrset(CRT_colors[RESET_COLOR]);
+ 
+-   currentLen += strlen(buffer) + 1;
++   currentLen += CRT_strWidth(buffer) + 1;
+ }
+ 
+ int FunctionBar_synthesizeEvent(const FunctionBar* this, int pos) {
+    int x = 0;
+    for (int i = 0; i < this->size; i++) {
+-      x += strlen(this->keys.constKeys[i]);
+-      x += strlen(this->functions[i]);
++      x += CRT_strWidth(this->keys.constKeys[i]);
++      x += CRT_strWidth(this->functions[i]);
+       if (pos < x) {
+          return this->events[i];
+       }
+--- a/MainPanel.c
++++ b/MainPanel.c
+@@ -29,10 +29,13 @@
+ static const char* const MainFunctions[]     = {"Help  ", "Setup ", "Search", "Filter", "Tree  ", "SortBy", "Nice -", "Nice +", "Kill  ", "Quit  ", NULL};
+ static const char* const MainFunctions_ro[]  = {"Help  ", "Setup ", "Search", "Filter", "Tree  ", "SortBy", "      ", "      ", "      ", "Quit  ", NULL};
+ 
++static const char* const MainFunctions_zh[]    = {"帮助  ", "设置  ", "搜索  ", "筛选  ", "树形  ", "排序  ", "Nice -", "Nice +", "结束  ", "退出  ", NULL};
++static const char* const MainFunctions_ro_zh[] = {"帮助  ", "设置  ", "搜索  ", "筛选  ", "树形  ", "排序  ", "      ", "      ", "      ", "退出  ", NULL};
++
+ void MainPanel_updateLabels(MainPanel* this, bool list, bool filter) {
+    FunctionBar* bar = MainPanel_getFunctionBar(this);
+-   FunctionBar_setLabel(bar, KEY_F(5), list   ? "List  " : "Tree  ");
+-   FunctionBar_setLabel(bar, KEY_F(4), filter ? "FILTER" : "Filter");
++   FunctionBar_setLabel(bar, KEY_F(5), CRT_trans(list   ? "List  " : "Tree  "));
++   FunctionBar_setLabel(bar, KEY_F(4), CRT_trans(filter ? "FILTER" : "Filter"));
+ }
+ 
+ static void MainPanel_idSearch(MainPanel* this, int ch) {
+@@ -191,7 +194,7 @@
+ 
+    IncSet_drawBar(this->inc, CRT_colors[FUNCTION_BAR]);
+    if (this->state->pauseUpdate) {
+-      FunctionBar_append("PAUSED", CRT_colors[PAUSED]);
++      FunctionBar_append(CRT_trans("PAUSED"), CRT_colors[PAUSED]);
+    }
+ }
+ 
+@@ -213,8 +216,9 @@
+ 
+ MainPanel* MainPanel_new(void) {
+    MainPanel* this = AllocThis(MainPanel);
+-   this->processBar = FunctionBar_new(MainFunctions, NULL, NULL);
+-   this->readonlyBar = FunctionBar_new(MainFunctions_ro, NULL, NULL);
++   bool zh = CRT_isChinese();
++   this->processBar = FunctionBar_new(zh ? MainFunctions_zh : MainFunctions, NULL, NULL);
++   this->readonlyBar = FunctionBar_new(zh ? MainFunctions_ro_zh : MainFunctions_ro, NULL, NULL);
+    FunctionBar* activeBar = Settings_isReadonly() ? this->readonlyBar : this->processBar;
+    Panel_init((Panel*) this, 1, 1, 1, 1, Class(Row), false, activeBar);
+    this->keys = xCalloc(KEY_MAX, sizeof(Htop_Action));
+--- a/IncSet.c
++++ b/IncSet.c
+@@ -37,22 +37,24 @@
+ }
+ 
+ static const char* const searchFunctions[] = {"Next  ", "Prev   ", "Cancel ", " Search: ", NULL};
++static const char* const searchFunctions_zh[] = {"下一个", "上一个 ", "取消   ", " 搜索:  ", NULL};
+ static const char* const searchKeys[] = {"F3", "S-F3", "Esc", "  "};
+ static const int searchEvents[] = {KEY_F(3), KEY_F(15), 27, ERR};
+ 
+ static inline void IncMode_initSearch(IncMode* search) {
+    memset(search, 0, sizeof(IncMode));
+-   search->bar = FunctionBar_new(searchFunctions, searchKeys, searchEvents);
++   search->bar = FunctionBar_new(CRT_isChinese() ? searchFunctions_zh : searchFunctions, searchKeys, searchEvents);
+    search->isFilter = false;
+ }
+ 
+ static const char* const filterFunctions[] = {"Done  ", "Clear ", " Filter: ", NULL};
++static const char* const filterFunctions_zh[] = {"完成  ", "清除   ", " 筛选:  ", NULL};
+ static const char* const filterKeys[] = {"Enter", "Esc", "  "};
+ static const int filterEvents[] = {13, 27, ERR};
+ 
+ static inline void IncMode_initFilter(IncMode* filter) {
+    memset(filter, 0, sizeof(IncMode));
+-   filter->bar = FunctionBar_new(filterFunctions, filterKeys, filterEvents);
++   filter->bar = FunctionBar_new(CRT_isChinese() ? filterFunctions_zh : filterFunctions, filterKeys, filterEvents);
+    filter->isFilter = true;
+ }
+ 
+--- a/TasksMeter.c
++++ b/TasksMeter.c
+@@ -39,6 +39,13 @@
+    xSnprintf(this->txtBuffer, sizeof(this->txtBuffer), "%u/%u", MINIMUM(pt->runningTasks, host->activeCPUs), pt->totalTasks);
+ }
+ 
++static void TasksMeter_appendText(RichString* out, int attr, const char* text) {
++   if (CRT_isChinese())
++      RichString_appendWide(out, attr, CRT_trans(text));
++   else
++      RichString_appendAscii(out, attr, text);
++}
++
+ static void TasksMeter_display(const Object* cast, RichString* out) {
+    const Meter* this = (const Meter*)cast;
+    const Settings* settings = this->host->settings;
+@@ -51,17 +58,17 @@
+    RichString_appendAscii(out, settings->hideUserlandThreads ? CRT_colors[METER_SHADOW] : CRT_colors[METER_TEXT], ", ");
+    len = xSnprintf(buffer, sizeof(buffer), "%d", (int)this->values[1]);
+    RichString_appendnAscii(out, settings->hideUserlandThreads ? CRT_colors[METER_SHADOW] : CRT_colors[TASKS_RUNNING], buffer, len);
+-   RichString_appendAscii(out, settings->hideUserlandThreads ? CRT_colors[METER_SHADOW] : CRT_colors[METER_TEXT], " thr");
++   TasksMeter_appendText(out, settings->hideUserlandThreads ? CRT_colors[METER_SHADOW] : CRT_colors[METER_TEXT], " thr");
+ 
+    RichString_appendAscii(out, settings->hideKernelThreads ? CRT_colors[METER_SHADOW] : CRT_colors[METER_TEXT], ", ");
+    len = xSnprintf(buffer, sizeof(buffer), "%d", (int)this->values[0]);
+    RichString_appendnAscii(out, settings->hideKernelThreads ? CRT_colors[METER_SHADOW] : CRT_colors[TASKS_RUNNING], buffer, len);
+-   RichString_appendAscii(out, settings->hideKernelThreads ? CRT_colors[METER_SHADOW] : CRT_colors[METER_TEXT], " kthr");
++   TasksMeter_appendText(out, settings->hideKernelThreads ? CRT_colors[METER_SHADOW] : CRT_colors[METER_TEXT], " kthr");
+ 
+-   RichString_appendAscii(out, CRT_colors[METER_TEXT], "; ");
++   TasksMeter_appendText(out, CRT_colors[METER_TEXT], "; ");
+    len = xSnprintf(buffer, sizeof(buffer), "%d", (int)this->values[3]);
+    RichString_appendnAscii(out, CRT_colors[TASKS_RUNNING], buffer, len);
+-   RichString_appendAscii(out, CRT_colors[METER_TEXT], " running");
++   TasksMeter_appendText(out, CRT_colors[METER_TEXT], " running");
+ }
+ 
+ const MeterClass TasksMeter_class = {
+--- a/CommandLine.c
++++ b/CommandLine.c
+@@ -323,6 +323,9 @@
+    else
+       setlocale(LC_CTYPE, "");
+ 
++   /* pick up the Chinese interface when the user asked for it */
++   CRT_i18nInit();
++
+    CommandLineStatus status = STATUS_OK;
+    CommandLineSettings flags = { 0 };
+ 
+--- a/OptionItem.c
++++ b/OptionItem.c
+@@ -108,13 +108,13 @@
+ 
+ TextItem* TextItem_new(const char* text) {
+    TextItem* this = AllocThis(TextItem);
+-   this->super.text = xStrdup(text);
++   this->super.text = xStrdup(CRT_trans(text));
+    return this;
+ }
+ 
+ CheckItem* CheckItem_newByRef(const char* text, bool* ref) {
+    CheckItem* this = AllocThis(CheckItem);
+-   this->super.text = xStrdup(text);
++   this->super.text = xStrdup(CRT_trans(text));
+    this->value = false;
+    this->ref = ref;
+    return this;
+@@ -122,7 +122,7 @@
+ 
+ CheckItem* CheckItem_newByVal(const char* text, bool value) {
+    CheckItem* this = AllocThis(CheckItem);
+-   this->super.text = xStrdup(text);
++   this->super.text = xStrdup(CRT_trans(text));
+    this->value = value;
+    this->ref = NULL;
+    return this;
+@@ -156,7 +156,7 @@
+    assert(min <= max);
+ 
+    NumberItem* this = AllocThis(NumberItem);
+-   this->super.text = xStrdup(text);
++   this->super.text = xStrdup(CRT_trans(text));
+    this->value = 0;
+    this->ref = ref;
+    this->scale = scale;
+@@ -169,7 +169,7 @@
+    assert(min <= max);
+ 
+    NumberItem* this = AllocThis(NumberItem);
+-   this->super.text = xStrdup(text);
++   this->super.text = xStrdup(CRT_trans(text));
+    this->value = CLAMP(value, min, max);
+    this->ref = NULL;
+    this->scale = scale;
+--- a/Panel.c
++++ b/Panel.c
+@@ -87,7 +87,7 @@
+ }
+ 
+ inline void Panel_setHeader(Panel* this, const char* header) {
+-   RichString_writeWide(&(this->header), CRT_colors[PANEL_HEADER_FOCUS], header);
++   RichString_writeWide(&(this->header), CRT_colors[PANEL_HEADER_FOCUS], CRT_trans(header));
+    this->needsRedraw = true;
+ }
+ 
+--- a/CategoriesPanel.c
++++ b/CategoriesPanel.c
+@@ -14,6 +14,7 @@
+ #include <stdlib.h>
+ 
+ #include "AvailableMetersPanel.h"
++#include "CRT.h"
+ #include "ColorsPanel.h"
+ #include "DisplayOptionsPanel.h"
+ #include "FunctionBar.h"
+@@ -47,7 +48,7 @@
+ 
+    for (size_t i = 0; i < columns; i++) {
+       char titleBuffer[32];
+-      xSnprintf(titleBuffer, sizeof(titleBuffer), "Column %zu", i + 1);
++      xSnprintf(titleBuffer, sizeof(titleBuffer), CRT_isChinese() ? "第%zu列" : "Column %zu", i + 1);
+       meterPanels[i] = MetersPanel_new(settings, titleBuffer, this->header->columns[i], this->scr);
+ 
+       if (i != 0) {
+@@ -181,7 +182,7 @@
+    this->header = header;
+    Panel_setHeader(super, "Categories");
+    for (size_t i = 0; i < ARRAYSIZE(categoriesPanelPages); i++)
+-      Panel_add(super, (Object*) ListItem_new(categoriesPanelPages[i].name, 0));
++      Panel_add(super, (Object*) ListItem_new(CRT_trans(categoriesPanelPages[i].name), 0));
+ 
+    ScreenManager_add(scr, super, 16);
+    categoriesPanelPages[0].ctor(this);
+--- a/DisplayOptionsPanel.c
++++ b/DisplayOptionsPanel.c
+@@ -20,6 +20,7 @@
+ #include "OptionItem.h"
+ #include "ProvideCurses.h"
+ #include "ScreensPanel.h"
++#include "XUtils.h"
+ 
+ 
+ static const char* const DisplayOptionsFunctions[] =       {"      ", "      ", "      ", "      ", "      ", "      ", "      ", "      ", "      ", "Done  ", NULL};
+@@ -139,11 +140,10 @@
+ 
+    Panel_setHeader(super, "Display options");
+ 
+-   #define TABMSG "For current screen tab: \0"
+-   char tabheader[sizeof(TABMSG) + SCREEN_NAME_LEN + 1] = TABMSG;
+-   strncat(tabheader, settings->ss->heading, SCREEN_NAME_LEN);
++   char tabheader[128];
++   xSnprintf(tabheader, sizeof(tabheader), "%s%s",
++             CRT_trans("For current screen tab: "), settings->ss->heading);
+    Panel_add(super, (Object*) TextItem_new(tabheader));
+-   #undef TABMSG
+ 
+    Panel_add(super, (Object*) CheckItem_newByRef("Tree view", &(settings->ss->treeView)));
+    Panel_add(super, (Object*) CheckItem_newByRef("- Tree view is always sorted by PID (htop 2 behavior)", &(settings->ss->treeViewAlwaysByPID)));
+--- a/AvailableMetersPanel.c
++++ b/AvailableMetersPanel.c
+@@ -14,6 +14,7 @@
+ #include <stdlib.h>
+ 
+ #include "CPUMeter.h"
++#include "CRT.h"
+ #include "DynamicMeter.h"
+ #include "FunctionBar.h"
+ #include "Hashtable.h"
+@@ -100,14 +101,14 @@
+ // Handle (&CPUMeter_class) entries in the AvailableMetersPanel
+ static void AvailableMetersPanel_addCPUMeters(Panel* super, const MeterClass* type, const Machine* host) {
+    if (host->existingCPUs > 1) {
+-      Panel_add(super, (Object*) ListItem_new("CPU average", 0));
++      Panel_add(super, (Object*) ListItem_new(CRT_trans("CPU average"), 0));
+       for (unsigned int i = 1; i <= host->existingCPUs; i++) {
+          char buffer[50];
+-         xSnprintf(buffer, sizeof(buffer), "%s %d", type->uiName, Settings_cpuId(host->settings, i - 1));
++         xSnprintf(buffer, sizeof(buffer), "%s %d", CRT_trans(type->uiName), Settings_cpuId(host->settings, i - 1));
+          Panel_add(super, (Object*) ListItem_new(buffer, i));
+       }
+    } else {
+-      Panel_add(super, (Object*) ListItem_new(type->uiName, 1));
++      Panel_add(super, (Object*) ListItem_new(CRT_trans(type->uiName), 1));
+    }
+ }
+ 
+@@ -138,7 +139,9 @@
+ 
+ // Handle remaining Platform Meter entries in the AvailableMetersPanel
+ static void AvailableMetersPanel_addPlatformMeter(Panel* super, const MeterClass* type, unsigned int offset) {
+-   const char* label = type->description ? type->description : type->uiName;
++   const char* label = type->description ? CRT_trans(type->description) : NULL;
++   if (!label || label == type->description)
++      label = CRT_trans(type->uiName);
+    Panel_add(super, (Object*) ListItem_new(label, offset << 16));
+ }
+ 
+--- a/Action.c
++++ b/Action.c
+@@ -534,7 +534,7 @@
+    Machine* host = st->host;
+    UsersTable_foreach(host->usersTable, addUserToVector, usersPanel);
+    Vector_insertionSort(usersPanel->items);
+-   ListItem* allUsers = ListItem_new("All users", -1);
++   ListItem* allUsers = ListItem_new(CRT_trans("All users"), -1);
+    Panel_insert(usersPanel, 0, (Object*) allUsers);
+    const ListItem* picked = (ListItem*) Action_pickFromVector(st, usersPanel, 19, false);
+    if (picked) {
+@@ -709,16 +709,16 @@
+    int line = 0;
+ 
+    mvaddstr(line++, 0, "htop " VERSION " - " COPYRIGHT);
+-   mvaddstr(line++, 0, "Released under the GNU GPLv2+. See 'man' page for more info.");
++   mvaddstr(line++, 0, CRT_trans("Released under the GNU GPLv2+. See 'man' page for more info."));
+ 
+    attrset(CRT_colors[DEFAULT_COLOR]);
+    line++;
+-   mvaddstr(line++, 0, "CPU usage bar: ");
++   mvaddstr(line++, 0, CRT_trans("CPU usage bar: "));
+ 
+ #define addbartext(attr, prefix, text)               \
+    do {                                              \
+       addattrstr(CRT_colors[DEFAULT_COLOR], prefix); \
+-      addattrstr(attr, text);                        \
++      addattrstr(attr, CRT_trans(text));             \
+    } while(0)
+ 
+    addattrstr(CRT_colors[BAR_BORDER], "[");
+@@ -739,7 +739,7 @@
+    addattrstr(CRT_colors[BAR_BORDER], "]");
+ 
+    attrset(CRT_colors[DEFAULT_COLOR]);
+-   mvaddstr(line++, 0, "Memory bar:    ");
++   mvaddstr(line++, 0, CRT_trans("Memory bar:    "));
+    addattrstr(CRT_colors[BAR_BORDER], "[");
+    addbartext(CRT_colors[MEMORY_USED], "", "used");
+    addbartext(CRT_colors[MEMORY_SHARED], "/", "shared");
+@@ -755,7 +755,7 @@
+    addattrstr(CRT_colors[BAR_BORDER], "]");
+ 
+    attrset(CRT_colors[DEFAULT_COLOR]);
+-   mvaddstr(line++, 0, "Swap bar:      ");
++   mvaddstr(line++, 0, CRT_trans("Swap bar:      "));
+    addattrstr(CRT_colors[BAR_BORDER], "[");
+    addbartext(CRT_colors[SWAP], "", "used");
+ #ifdef HTOP_LINUX
+@@ -773,19 +773,20 @@
+ #undef addbartext
+ 
+    attrset(CRT_colors[DEFAULT_COLOR]);
+-   mvaddstr(line++, 0, "Type and layout of header meters are configurable in the setup screen.");
++   mvaddstr(line++, 0, CRT_trans("Type and layout of header meters are configurable in the setup screen."));
+    if (CRT_colorScheme == COLORSCHEME_MONOCHROME) {
+-      mvaddstr(line, 0, "In monochrome, meters display as different chars, in order: |#*@$%&.");
++      mvaddstr(line, 0, CRT_trans("In monochrome, meters display as different chars, in order: |#*@$%&."));
+    }
+    line++;
+ 
+ #define addattrstatestr(attr, state, desc)              \
+    do {                                                 \
+       addattrstr(attr, state);                          \
+-      addattrstr(CRT_colors[DEFAULT_COLOR], ": " desc); \
++      addattrstr(CRT_colors[DEFAULT_COLOR], ": ");      \
++      addattrstr(CRT_colors[DEFAULT_COLOR], CRT_trans(desc)); \
+    } while(0)
+ 
+-   mvaddstr(line, 0, "Process state: ");
++   mvaddstr(line, 0, CRT_trans("Process state: "));
+    addattrstatestr(CRT_colors[PROCESS_RUN_STATE], "R", "running; ");
+    addattrstatestr(CRT_colors[PROCESS_SHADOW], "S", "sleeping; ");
+    addattrstatestr(CRT_colors[PROCESS_RUN_STATE], "t", "traced/stopped; ");
+@@ -802,15 +803,17 @@
+    int item;
+    for (item = 0; helpLeft[item].key; item++) {
+       attrset((helpLeft[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[DEFAULT_COLOR]);
+-      mvaddstr(line + item, 10, helpLeft[item].info);
++      mvaddstr(line + item, 10, CRT_trans(helpLeft[item].info));
+       attrset((helpLeft[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[HELP_BOLD]);
+       mvaddstr(line + item, 1,  helpLeft[item].key);
+-      if (String_eq(helpLeft[item].key, "      H: ")) {
+-         attrset((helpLeft[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[PROCESS_THREAD]);
+-         mvaddstr(line + item, 33, "threads");
+-      } else if (String_eq(helpLeft[item].key, "      K: ")) {
+-         attrset((helpLeft[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[PROCESS_THREAD]);
+-         mvaddstr(line + item, 27, "threads");
++      if (!CRT_isChinese()) {
++         if (String_eq(helpLeft[item].key, "      H: ")) {
++            attrset((helpLeft[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[PROCESS_THREAD]);
++            mvaddstr(line + item, 33, CRT_trans("threads"));
++         } else if (String_eq(helpLeft[item].key, "      K: ")) {
++            attrset((helpLeft[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[PROCESS_THREAD]);
++            mvaddstr(line + item, 27, CRT_trans("threads"));
++         }
+       }
+    }
+    int leftHelpItems = item;
+@@ -819,13 +822,13 @@
+       attrset((helpRight[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[HELP_BOLD]);
+       mvaddstr(line + item, 43, helpRight[item].key);
+       attrset((helpRight[item].roInactive && readonly) ? CRT_colors[HELP_SHADOW] : CRT_colors[DEFAULT_COLOR]);
+-      mvaddstr(line + item, 52, helpRight[item].info);
++      mvaddstr(line + item, 52, CRT_trans(helpRight[item].info));
+    }
+    line += MAXIMUM(leftHelpItems, item);
+    line++;
+ 
+    attrset(CRT_colors[HELP_BOLD]);
+-   mvaddstr(line++, 0, "Press any key to return.");
++   mvaddstr(line++, 0, CRT_trans("Press any key to return."));
+    attrset(CRT_colors[DEFAULT_COLOR]);
+    refresh();
+    CRT_readKey();
+--- a/Scheduling.c
++++ b/Scheduling.c
+@@ -1,165 +1,166 @@
+-/*
+-htop - Scheduling.c
+-(C) 2023 htop dev team
+-Released under the GNU GPLv2+, see the COPYING file
+-in the source distribution for its full text.
+-*/
+-
+-#include "config.h" // IWYU pragma: keep
+-
+-#include "Scheduling.h"
+-
+-#ifdef SCHEDULER_SUPPORT
+-
+-#include <assert.h>
+-#include <stddef.h>
+-
+-#include "FunctionBar.h"
+-#include "ListItem.h"
+-#include "Macros.h"
+-#include "Object.h"
+-#include "Panel.h"
+-#include "XUtils.h"
+-
+-
+-static const SchedulingPolicy policies[] = {
+-   [SCHED_OTHER] = { "Other",      SCHED_OTHER, false },
+-#ifdef SCHED_BATCH
+-   [SCHED_BATCH] = { "Batch",      SCHED_BATCH, false },
+-#endif
+-#ifdef SCHED_IDLE
+-   [SCHED_IDLE]  = { "Idle",       SCHED_IDLE,  false },
+-#endif
+-   [SCHED_FIFO]  = { "FiFo",       SCHED_FIFO,  true },
+-   [SCHED_RR]    = { "RoundRobin", SCHED_RR,    true },
+-};
+-
+-#ifdef SCHED_RESET_ON_FORK
+-static bool reset_on_fork = false;
+-#endif
+-
+-
+-Panel* Scheduling_newPolicyPanel(int preSelectedPolicy) {
+-   Panel* this = Panel_new(0, 0, 0, 0, Class(ListItem), true, FunctionBar_newEnterEsc("Select ", "Cancel "));
+-   Panel_setHeader(this, "New policy:");
+-
+-#ifdef SCHED_RESET_ON_FORK
+-   Panel_add(this, (Object*) ListItem_new(reset_on_fork ? "Reset on fork: on" : "Reset on fork: off", -1));
+-#endif
+-
+-   for (unsigned i = 0; i < ARRAYSIZE(policies); i++) {
+-      if (!policies[i].name)
+-         continue;
+-
+-      Panel_add(this, (Object*) ListItem_new(policies[i].name, policies[i].id));
+-      if (policies[i].id == preSelectedPolicy)
+-         Panel_setSelected(this, i);
+-   }
+-
+-   return this;
+-}
+-
+-void Scheduling_togglePolicyPanelResetOnFork(Panel* schedPanel) {
+-#ifdef SCHED_RESET_ON_FORK
+-   reset_on_fork = !reset_on_fork;
+-
+-   ListItem* item = (ListItem*) Panel_get(schedPanel, 0);
+-
+-   free_and_xStrdup(&item->value, reset_on_fork ? "Reset on fork: on" : "Reset on fork: off");
+-#else
+-   (void)schedPanel;
+-#endif
+-}
+-
+-Panel* Scheduling_newPriorityPanel(int policy, int preSelectedPriority) {
+-   if (policy < 0 || (unsigned)policy >= ARRAYSIZE(policies) || policies[policy].name == NULL)
+-      return NULL;
+-
+-   if (!policies[policy].prioritySupport)
+-      return NULL;
+-
+-   int min = sched_get_priority_min(policy);
+-   if (min < 0)
+-      return NULL;
+-   int max = sched_get_priority_max(policy);
+-   if (max < 0 )
+-      return NULL;
+-
+-   Panel* this = Panel_new(0, 0, 0, 0, Class(ListItem), true, FunctionBar_newEnterEsc("Select ", "Cancel "));
+-   Panel_setHeader(this, "Priority:");
+-
+-   for (int i = min; i <= max; i++) {
+-      char buf[16];
+-      xSnprintf(buf, sizeof(buf), "%d", i);
+-      Panel_add(this, (Object*) ListItem_new(buf, i));
+-      if (i == preSelectedPriority)
+-         Panel_setSelected(this, i);
+-   }
+-
+-   return this;
+-}
+-
+-static bool Scheduling_setPolicy(Process* p, Arg arg) {
+-   const SchedulingArg* sarg = arg.v;
+-   int policy = sarg->policy;
+-
+-   assert(policy >= 0);
+-   assert((unsigned)policy < ARRAYSIZE(policies));
+-   assert(policies[policy].name);
+-
+-   const struct sched_param param = { .sched_priority = policies[policy].prioritySupport ? sarg->priority : 0 };
+-
+-   #ifdef SCHED_RESET_ON_FORK
+-   if (reset_on_fork)
+-      policy &= SCHED_RESET_ON_FORK;
+-   #endif
+-
+-   int r = sched_setscheduler(Process_getPid(p), policy, &param);
+-
+-   /* POSIX says on success the previous scheduling policy should be returned,
+-    * but Linux always returns 0. */
+-   return r != -1;
+-}
+-
+-bool Scheduling_rowSetPolicy(Row* row, Arg arg) {
+-   Process* p = (Process*) row;
+-   assert(Object_isA((const Object*) p, (const ObjectClass*) &Process_class));
+-   return Scheduling_setPolicy(p, arg);
+-}
+-
+-const char* Scheduling_formatPolicy(int policy) {
+-#ifdef SCHED_RESET_ON_FORK
+-   policy = policy & ~SCHED_RESET_ON_FORK;
+-#endif
+-
+-   switch (policy) {
+-      case SCHED_OTHER:
+-         return "OTHER";
+-      case SCHED_FIFO:
+-         return "FIFO";
+-      case SCHED_RR:
+-         return "RR";
+-#ifdef SCHED_BATCH
+-      case SCHED_BATCH:
+-         return "BATCH";
+-#endif
+-#ifdef SCHED_IDLE
+-      case SCHED_IDLE:
+-         return "IDLE";
+-#endif
+-#ifdef SCHED_DEADLINE
+-      case SCHED_DEADLINE:
+-         return "EDF";
+-#endif
+-      default:
+-         return "???";
+-   }
+-}
+-
+-/*
+- * Gather scheduling policy (thread-specific data)
+- */
+-void Scheduling_readProcessPolicy(Process* proc) {
+-   proc->scheduling_policy = sched_getscheduler(Process_getPid(proc));
+-}
+-#endif  /* SCHEDULER_SUPPORT */
++﻿/*
++htop - Scheduling.c
++(C) 2023 htop dev team
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++#include "CRT.h"
++
++#include "Scheduling.h"
++
++#ifdef SCHEDULER_SUPPORT
++
++#include <assert.h>
++#include <stddef.h>
++
++#include "FunctionBar.h"
++#include "ListItem.h"
++#include "Macros.h"
++#include "Object.h"
++#include "Panel.h"
++#include "XUtils.h"
++
++
++static const SchedulingPolicy policies[] = {
++   [SCHED_OTHER] = { "Other",      SCHED_OTHER, false },
++#ifdef SCHED_BATCH
++   [SCHED_BATCH] = { "Batch",      SCHED_BATCH, false },
++#endif
++#ifdef SCHED_IDLE
++   [SCHED_IDLE]  = { "Idle",       SCHED_IDLE,  false },
++#endif
++   [SCHED_FIFO]  = { "FiFo",       SCHED_FIFO,  true },
++   [SCHED_RR]    = { "RoundRobin", SCHED_RR,    true },
++};
++
++#ifdef SCHED_RESET_ON_FORK
++static bool reset_on_fork = false;
++#endif
++
++
++Panel* Scheduling_newPolicyPanel(int preSelectedPolicy) {
++   Panel* this = Panel_new(0, 0, 0, 0, Class(ListItem), true, FunctionBar_newEnterEsc("Select ", "Cancel "));
++   Panel_setHeader(this, "New policy:");
++
++#ifdef SCHED_RESET_ON_FORK
++   Panel_add(this, (Object*) ListItem_new(CRT_trans(reset_on_fork ? "Reset on fork: on" : "Reset on fork: off"), -1));
++#endif
++
++   for (unsigned i = 0; i < ARRAYSIZE(policies); i++) {
++      if (!policies[i].name)
++         continue;
++
++      Panel_add(this, (Object*) ListItem_new(CRT_trans(policies[i].name), policies[i].id));
++      if (policies[i].id == preSelectedPolicy)
++         Panel_setSelected(this, i);
++   }
++
++   return this;
++}
++
++void Scheduling_togglePolicyPanelResetOnFork(Panel* schedPanel) {
++#ifdef SCHED_RESET_ON_FORK
++   reset_on_fork = !reset_on_fork;
++
++   ListItem* item = (ListItem*) Panel_get(schedPanel, 0);
++
++   free_and_xStrdup(&item->value, reset_on_fork ? "Reset on fork: on" : "Reset on fork: off");
++#else
++   (void)schedPanel;
++#endif
++}
++
++Panel* Scheduling_newPriorityPanel(int policy, int preSelectedPriority) {
++   if (policy < 0 || (unsigned)policy >= ARRAYSIZE(policies) || policies[policy].name == NULL)
++      return NULL;
++
++   if (!policies[policy].prioritySupport)
++      return NULL;
++
++   int min = sched_get_priority_min(policy);
++   if (min < 0)
++      return NULL;
++   int max = sched_get_priority_max(policy);
++   if (max < 0 )
++      return NULL;
++
++   Panel* this = Panel_new(0, 0, 0, 0, Class(ListItem), true, FunctionBar_newEnterEsc("Select ", "Cancel "));
++   Panel_setHeader(this, "Priority:");
++
++   for (int i = min; i <= max; i++) {
++      char buf[16];
++      xSnprintf(buf, sizeof(buf), "%d", i);
++      Panel_add(this, (Object*) ListItem_new(buf, i));
++      if (i == preSelectedPriority)
++         Panel_setSelected(this, i);
++   }
++
++   return this;
++}
++
++static bool Scheduling_setPolicy(Process* p, Arg arg) {
++   const SchedulingArg* sarg = arg.v;
++   int policy = sarg->policy;
++
++   assert(policy >= 0);
++   assert((unsigned)policy < ARRAYSIZE(policies));
++   assert(policies[policy].name);
++
++   const struct sched_param param = { .sched_priority = policies[policy].prioritySupport ? sarg->priority : 0 };
++
++   #ifdef SCHED_RESET_ON_FORK
++   if (reset_on_fork)
++      policy &= SCHED_RESET_ON_FORK;
++   #endif
++
++   int r = sched_setscheduler(Process_getPid(p), policy, &param);
++
++   /* POSIX says on success the previous scheduling policy should be returned,
++    * but Linux always returns 0. */
++   return r != -1;
++}
++
++bool Scheduling_rowSetPolicy(Row* row, Arg arg) {
++   Process* p = (Process*) row;
++   assert(Object_isA((const Object*) p, (const ObjectClass*) &Process_class));
++   return Scheduling_setPolicy(p, arg);
++}
++
++const char* Scheduling_formatPolicy(int policy) {
++#ifdef SCHED_RESET_ON_FORK
++   policy = policy & ~SCHED_RESET_ON_FORK;
++#endif
++
++   switch (policy) {
++      case SCHED_OTHER:
++         return "OTHER";
++      case SCHED_FIFO:
++         return "FIFO";
++      case SCHED_RR:
++         return "RR";
++#ifdef SCHED_BATCH
++      case SCHED_BATCH:
++         return "BATCH";
++#endif
++#ifdef SCHED_IDLE
++      case SCHED_IDLE:
++         return "IDLE";
++#endif
++#ifdef SCHED_DEADLINE
++      case SCHED_DEADLINE:
++         return "EDF";
++#endif
++      default:
++         return "???";
++   }
++}
++
++/*
++ * Gather scheduling policy (thread-specific data)
++ */
++void Scheduling_readProcessPolicy(Process* proc) {
++   proc->scheduling_policy = sched_getscheduler(Process_getPid(proc));
++}
++#endif  /* SCHEDULER_SUPPORT */
+--- a/AvailableColumnsPanel.c
++++ b/AvailableColumnsPanel.c
+@@ -1,141 +1,148 @@
+-/*
+-htop - AvailableColumnsPanel.c
+-(C) 2004-2011 Hisham H. Muhammad
+-Released under the GNU GPLv2+, see the COPYING file
+-in the source distribution for its full text.
+-*/
+-
+-#include "config.h" // IWYU pragma: keep
+-
+-#include "AvailableColumnsPanel.h"
+-
+-#include <assert.h>
+-#include <ctype.h>
+-#include <stdbool.h>
+-#include <stdlib.h>
+-
+-#include "ColumnsPanel.h"
+-#include "DynamicColumn.h"
+-#include "FunctionBar.h"
+-#include "Hashtable.h"
+-#include "ListItem.h"
+-#include "Object.h"
+-#include "Platform.h"
+-#include "Process.h"
+-#include "ProvideCurses.h"
+-#include "RowField.h"
+-#include "XUtils.h"
+-
+-
+-static const char* const AvailableColumnsFunctions[] = {"      ", "      ", "      ", "      ", "Add   ", "      ", "      ", "      ", "      ", "Done  ", NULL};
+-
+-static void AvailableColumnsPanel_delete(Object* object) {
+-   AvailableColumnsPanel* this = (AvailableColumnsPanel*) object;
+-   Panel_done(&this->super);
+-   free(this);
+-}
+-
+-static void AvailableColumnsPanel_insert(AvailableColumnsPanel* this, int at, int key) {
+-   const char* name;
+-   if (key >= ROW_DYNAMIC_FIELDS)
+-      name = DynamicColumn_name(key);
+-   else
+-      name = Process_fields[key].name;
+-   Panel_insert(this->columns, at, (Object*) ListItem_new(name, key));
+-}
+-
+-static HandlerResult AvailableColumnsPanel_eventHandler(Panel* super, int ch) {
+-   AvailableColumnsPanel* this = (AvailableColumnsPanel*) super;
+-   HandlerResult result = IGNORED;
+-
+-   switch (ch) {
+-      case 13:
+-      case KEY_ENTER:
+-      case KEY_F(5): {
+-         const ListItem* selected = (ListItem*) Panel_getSelected(super);
+-         if (!selected)
+-            break;
+-
+-         int at = Panel_getSelectedIndex(this->columns);
+-         AvailableColumnsPanel_insert(this, at, selected->key);
+-         Panel_setSelected(this->columns, at + 1);
+-         ColumnsPanel_update(this->columns);
+-         result = HANDLED;
+-         break;
+-      }
+-      default:
+-         if (0 < ch && ch < 255 && isgraph((unsigned char)ch))
+-            result = Panel_selectByTyping(super, ch);
+-         break;
+-   }
+-   return result;
+-}
+-
+-const PanelClass AvailableColumnsPanel_class = {
+-   .super = {
+-      .extends = Class(Panel),
+-      .delete = AvailableColumnsPanel_delete
+-   },
+-   .eventHandler = AvailableColumnsPanel_eventHandler
+-};
+-
+-static void AvailableColumnsPanel_addDynamicColumn(ht_key_t key, void* value, void* data) {
+-   const DynamicColumn* column = (const DynamicColumn*) value;
+-   if (column->table) /* DynamicScreen, handled differently */
+-      return;
+-   AvailableColumnsPanel* this = (AvailableColumnsPanel*) data;
+-   const char* title = column->heading ? column->heading : column->name;
+-   const char* text = column->description ? column->description : column->caption;
+-   char description[256];
+-   if (text)
+-      xSnprintf(description, sizeof(description), "%s - %s", title, text);
+-   else
+-      xSnprintf(description, sizeof(description), "%s", title);
+-   Panel_add(&this->super, (Object*) ListItem_new(description, key));
+-}
+-
+-// Handle DynamicColumns entries in the AvailableColumnsPanel
+-static void AvailableColumnsPanel_addDynamicColumns(AvailableColumnsPanel* this, Hashtable* dynamicColumns) {
+-   assert(dynamicColumns);
+-   Hashtable_foreach(dynamicColumns, AvailableColumnsPanel_addDynamicColumn, this);
+-}
+-
+-// Handle remaining Platform Meter entries in the AvailableColumnsPanel
+-static void AvailableColumnsPanel_addPlatformColumns(AvailableColumnsPanel* this) {
+-   for (int i = 1; i < LAST_PROCESSFIELD; i++) {
+-      if (Process_fields[i].description) {
+-         char description[256];
+-         xSnprintf(description, sizeof(description), "%s - %s", Process_fields[i].name, Process_fields[i].description);
+-         Panel_add(&this->super, (Object*) ListItem_new(description, i));
+-      }
+-   }
+-}
+-
+-// Handle DynamicColumns entries associated with DynamicScreens
+-static void AvailableColumnsPanel_addDynamicScreens(AvailableColumnsPanel* this, const char* screen) {
+-   Platform_addDynamicScreenAvailableColumns(&this->super, screen);
+-}
+-
+-void AvailableColumnsPanel_fill(AvailableColumnsPanel* this, const char* dynamicScreen, Hashtable* dynamicColumns) {
+-   Panel_prune(&this->super);
+-   if (dynamicScreen) {
+-      AvailableColumnsPanel_addDynamicScreens(this, dynamicScreen);
+-   } else {
+-      AvailableColumnsPanel_addPlatformColumns(this);
+-      AvailableColumnsPanel_addDynamicColumns(this, dynamicColumns);
+-   }
+-}
+-
+-AvailableColumnsPanel* AvailableColumnsPanel_new(Panel* columns, Hashtable* dynamicColumns) {
+-   AvailableColumnsPanel* this = AllocThis(AvailableColumnsPanel);
+-   Panel* super = &this->super;
+-
+-   FunctionBar* fuBar = FunctionBar_new(AvailableColumnsFunctions, NULL, NULL);
+-   Panel_init(super, 1, 1, 1, 1, Class(ListItem), true, fuBar);
+-   Panel_setHeader(super, "Available Columns");
+-
+-   this->columns = columns;
+-   AvailableColumnsPanel_fill(this, NULL, dynamicColumns);
+-
+-   return this;
+-}
++﻿/*
++htop - AvailableColumnsPanel.c
++(C) 2004-2011 Hisham H. Muhammad
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++#include "CRT.h"
++
++#include "AvailableColumnsPanel.h"
++
++#include <assert.h>
++#include <ctype.h>
++#include <stdbool.h>
++#include <stdlib.h>
++
++#include "ColumnsPanel.h"
++#include "DynamicColumn.h"
++#include "FunctionBar.h"
++#include "Hashtable.h"
++#include "ListItem.h"
++#include "Object.h"
++#include "Platform.h"
++#include "Process.h"
++#include "ProvideCurses.h"
++#include "RowField.h"
++#include "XUtils.h"
++
++
++static const char* const AvailableColumnsFunctions[] = {"      ", "      ", "      ", "      ", "Add   ", "      ", "      ", "      ", "      ", "Done  ", NULL};
++
++static void AvailableColumnsPanel_delete(Object* object) {
++   AvailableColumnsPanel* this = (AvailableColumnsPanel*) object;
++   Panel_done(&this->super);
++   free(this);
++}
++
++static void AvailableColumnsPanel_insert(AvailableColumnsPanel* this, int at, int key) {
++   const char* name;
++   if (key >= ROW_DYNAMIC_FIELDS)
++      name = DynamicColumn_name(key);
++   else
++      name = Process_fields[key].name;
++   Panel_insert(this->columns, at, (Object*) ListItem_new(name, key));
++}
++
++static HandlerResult AvailableColumnsPanel_eventHandler(Panel* super, int ch) {
++   AvailableColumnsPanel* this = (AvailableColumnsPanel*) super;
++   HandlerResult result = IGNORED;
++
++   switch (ch) {
++      case 13:
++      case KEY_ENTER:
++      case KEY_F(5): {
++         const ListItem* selected = (ListItem*) Panel_getSelected(super);
++         if (!selected)
++            break;
++
++         int at = Panel_getSelectedIndex(this->columns);
++         AvailableColumnsPanel_insert(this, at, selected->key);
++         Panel_setSelected(this->columns, at + 1);
++         ColumnsPanel_update(this->columns);
++         result = HANDLED;
++         break;
++      }
++      default:
++         if (0 < ch && ch < 255 && isgraph((unsigned char)ch))
++            result = Panel_selectByTyping(super, ch);
++         break;
++   }
++   return result;
++}
++
++const PanelClass AvailableColumnsPanel_class = {
++   .super = {
++      .extends = Class(Panel),
++      .delete = AvailableColumnsPanel_delete
++   },
++   .eventHandler = AvailableColumnsPanel_eventHandler
++};
++
++static void AvailableColumnsPanel_addDynamicColumn(ht_key_t key, void* value, void* data) {
++   const DynamicColumn* column = (const DynamicColumn*) value;
++   if (column->table) /* DynamicScreen, handled differently */
++      return;
++   AvailableColumnsPanel* this = (AvailableColumnsPanel*) data;
++   const char* title = column->heading ? column->heading : column->name;
++   const char* text = column->description ? column->description : column->caption;
++   char description[256];
++   if (CRT_isChinese())
++      xSnprintf(description, sizeof(description), "%s", CRT_transTrim(title));
++   else if (text)
++      xSnprintf(description, sizeof(description), "%s - %s", title, text);
++   else
++      xSnprintf(description, sizeof(description), "%s", title);
++   Panel_add(&this->super, (Object*) ListItem_new(description, key));
++}
++
++// Handle DynamicColumns entries in the AvailableColumnsPanel
++static void AvailableColumnsPanel_addDynamicColumns(AvailableColumnsPanel* this, Hashtable* dynamicColumns) {
++   assert(dynamicColumns);
++   Hashtable_foreach(dynamicColumns, AvailableColumnsPanel_addDynamicColumn, this);
++}
++
++// Handle remaining Platform Meter entries in the AvailableColumnsPanel
++static void AvailableColumnsPanel_addPlatformColumns(AvailableColumnsPanel* this) {
++   for (int i = 1; i < LAST_PROCESSFIELD; i++) {
++      if (Process_fields[i].description) {
++         char description[256];
++         if (CRT_isChinese())
++            xSnprintf(description, sizeof(description), "%s",
++                      CRT_transTrim(Process_fields[i].title ? Process_fields[i].title : Process_fields[i].name));
++         else
++            xSnprintf(description, sizeof(description), "%s - %s", Process_fields[i].name, Process_fields[i].description);
++         Panel_add(&this->super, (Object*) ListItem_new(description, i));
++      }
++   }
++}
++
++// Handle DynamicColumns entries associated with DynamicScreens
++static void AvailableColumnsPanel_addDynamicScreens(AvailableColumnsPanel* this, const char* screen) {
++   Platform_addDynamicScreenAvailableColumns(&this->super, screen);
++}
++
++void AvailableColumnsPanel_fill(AvailableColumnsPanel* this, const char* dynamicScreen, Hashtable* dynamicColumns) {
++   Panel_prune(&this->super);
++   if (dynamicScreen) {
++      AvailableColumnsPanel_addDynamicScreens(this, dynamicScreen);
++   } else {
++      AvailableColumnsPanel_addPlatformColumns(this);
++      AvailableColumnsPanel_addDynamicColumns(this, dynamicColumns);
++   }
++}
++
++AvailableColumnsPanel* AvailableColumnsPanel_new(Panel* columns, Hashtable* dynamicColumns) {
++   AvailableColumnsPanel* this = AllocThis(AvailableColumnsPanel);
++   Panel* super = &this->super;
++
++   FunctionBar* fuBar = FunctionBar_new(AvailableColumnsFunctions, NULL, NULL);
++   Panel_init(super, 1, 1, 1, 1, Class(ListItem), true, fuBar);
++   Panel_setHeader(super, "Available Columns");
++
++   this->columns = columns;
++   AvailableColumnsPanel_fill(this, NULL, dynamicColumns);
++
++   return this;
++}
+--- a/TraceScreen.c
++++ b/TraceScreen.c
+@@ -1,4 +1,4 @@
+-/*
++﻿/*
+ htop - TraceScreen.c
+ (C) 2005-2006 Hisham H. Muhammad
+ Released under the GNU GPLv2+, see the COPYING file
+@@ -63,7 +63,7 @@
+ }
+ 
+ static void TraceScreen_draw(InfoScreen* this) {
+-   InfoScreen_drawTitled(this, "Trace of process %d - %s", Process_getPid(this->process), Process_getCommand(this->process));
++   InfoScreen_drawTitled(this, CRT_trans("Trace of process %d - %s"), Process_getPid(this->process), Process_getCommand(this->process));
+ }
+ 
+ bool TraceScreen_forkTracer(TraceScreen* this) {
+--- a/OpenFilesScreen.c
++++ b/OpenFilesScreen.c
+@@ -1,315 +1,316 @@
+-/*
+-htop - OpenFilesScreen.c
+-(C) 2005-2006 Hisham H. Muhammad
+-Released under the GNU GPLv2+, see the COPYING file
+-in the source distribution for its full text.
+-*/
+-
+-#include "config.h" // IWYU pragma: keep
+-
+-#include "OpenFilesScreen.h"
+-
+-#include <errno.h>
+-#include <fcntl.h>
+-#include <inttypes.h>
+-#include <stdbool.h>
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <unistd.h>
+-#include <sys/types.h>
+-#include <sys/wait.h>
+-#include <sys/stat.h>
+-
+-#include "Macros.h"
+-#include "Panel.h"
+-#include "ProvideCurses.h"
+-#include "Vector.h"
+-#include "XUtils.h"
+-
+-
+-// cf. getIndexForType; must be larger than the maximum value returned.
+-#define LSOF_DATACOL_COUNT 8
+-
+-typedef struct OpenFiles_Data_ {
+-   char* data[LSOF_DATACOL_COUNT];
+-} OpenFiles_Data;
+-
+-typedef struct OpenFiles_ProcessData_ {
+-   OpenFiles_Data data;
+-   int error;
+-   int cols[LSOF_DATACOL_COUNT];
+-   struct OpenFiles_FileData_* files;
+-} OpenFiles_ProcessData;
+-
+-typedef struct OpenFiles_FileData_ {
+-   OpenFiles_Data data;
+-   struct OpenFiles_FileData_* next;
+-} OpenFiles_FileData;
+-
+-static size_t getIndexForType(char type) {
+-   switch (type) {
+-      case 'f':
+-         return 0;
+-      case 'a':
+-         return 1;
+-      case 'D':
+-         return 2;
+-      case 'i':
+-         return 3;
+-      case 'n':
+-         return 4;
+-      case 's':
+-         return 5;
+-      case 't':
+-         return 6;
+-      case 'o':
+-         return 7;
+-   }
+-
+-   /* should never reach here */
+-   abort();
+-}
+-
+-static const char* getDataForType(const OpenFiles_Data* data, char type) {
+-   size_t index = getIndexForType(type);
+-   return data->data[index] ? data->data[index] : "";
+-}
+-
+-OpenFilesScreen* OpenFilesScreen_new(const Process* process) {
+-   OpenFilesScreen* this = xCalloc(1, sizeof(OpenFilesScreen));
+-   Object_setClass(this, Class(OpenFilesScreen));
+-   if (Process_isThread(process)) {
+-      this->pid = Process_getThreadGroup(process);
+-   } else {
+-      this->pid = Process_getPid(process);
+-   }
+-   return (OpenFilesScreen*) InfoScreen_init(&this->super, process, NULL, LINES - 2, "   FD TYPE    MODE DEVICE           SIZE     OFFSET       NODE  NAME");
+-}
+-
+-void OpenFilesScreen_delete(Object* this) {
+-   free(InfoScreen_done((InfoScreen*)this));
+-}
+-
+-static void OpenFilesScreen_draw(InfoScreen* this) {
+-   InfoScreen_drawTitled(this, "Snapshot of files open in process %d - %s", ((OpenFilesScreen*)this)->pid, Process_getCommand(this->process));
+-}
+-
+-static OpenFiles_ProcessData* OpenFilesScreen_getProcessData(pid_t pid) {
+-   OpenFiles_ProcessData* pdata = xCalloc(1, sizeof(OpenFiles_ProcessData));
+-   pdata->cols[getIndexForType('s')] = 8;
+-   pdata->cols[getIndexForType('o')] = 8;
+-   pdata->cols[getIndexForType('i')] = 8;
+-
+-   int fdpair[2] = {0, 0};
+-   if (pipe(fdpair) == -1) {
+-      pdata->error = 1;
+-      return pdata;
+-   }
+-
+-   pid_t child = fork();
+-   if (child == -1) {
+-      close(fdpair[1]);
+-      close(fdpair[0]);
+-      pdata->error = 1;
+-      return pdata;
+-   }
+-
+-   if (child == 0) {
+-      close(fdpair[0]);
+-      dup2(fdpair[1], STDOUT_FILENO);
+-      close(fdpair[1]);
+-      int fdnull = open("/dev/null", O_WRONLY);
+-      if (fdnull < 0) {
+-         exit(1);
+-      }
+-
+-      dup2(fdnull, STDERR_FILENO);
+-      close(fdnull);
+-      char buffer[32] = {0};
+-      xSnprintf(buffer, sizeof(buffer), "%d", pid);
+-      // Use of NULL in variadic functions must have a pointer cast.
+-      // The NULL constant is not required by standard to have a pointer type.
+-      execlp("lsof", "lsof", "-P", "-o", "-p", buffer, "-F", (char*)NULL);
+-      exit(127);
+-   }
+-   close(fdpair[1]);
+-
+-   OpenFiles_Data* item = &(pdata->data);
+-   OpenFiles_FileData* fdata = NULL;
+-   bool lsofIncludesFileSize = false;
+-
+-   FILE* fp = fdopen(fdpair[0], "r");
+-   if (!fp) {
+-      pdata->error = 1;
+-      return pdata;
+-   }
+-   for (;;) {
+-      char* line = String_readLine(fp);
+-      if (!line) {
+-         break;
+-      }
+-
+-      unsigned char cmd = line[0];
+-      switch (cmd) {
+-         case 'f':  /* file descriptor */
+-         {
+-            OpenFiles_FileData* nextFile = xCalloc(1, sizeof(OpenFiles_FileData));
+-            if (fdata == NULL) {
+-               pdata->files = nextFile;
+-            } else {
+-               fdata->next = nextFile;
+-            }
+-            fdata = nextFile;
+-            item = &(fdata->data);
+-         } /* FALLTHRU */
+-         case 'a':  /* file access mode */
+-         case 'D':  /* file's major/minor device number */
+-         case 'i':  /* file's inode number */
+-         case 'n':  /* file name, comment, Internet address */
+-         case 's':  /* file's size */
+-         case 't':  /* file's type */
+-         {
+-            size_t index = getIndexForType(cmd);
+-            free_and_xStrdup(&item->data[index], line + 1);
+-            size_t dlen = strlen(item->data[index]);
+-            if (dlen > (size_t)pdata->cols[index]) {
+-               pdata->cols[index] = (int)CLAMP(dlen, 0, INT16_MAX);
+-            }
+-            break;
+-         }
+-         case 'o':  /* file's offset */
+-         {
+-            size_t index = getIndexForType(cmd);
+-            if (String_startsWith(line + 1, "0t")) {
+-               free_and_xStrdup(&item->data[index], line + 3);
+-            } else {
+-               free_and_xStrdup(&item->data[index], line + 1);
+-            }
+-            size_t dlen = strlen(item->data[index]);
+-            if (dlen > (size_t)pdata->cols[index]) {
+-               pdata->cols[index] = (int)CLAMP(dlen, 0, INT16_MAX);
+-            }
+-            break;
+-         }
+-         case 'c':  /* process command name  */
+-         case 'd':  /* file's device character code */
+-         case 'g':  /* process group ID */
+-         case 'G':  /* file flags */
+-         case 'k':  /* link count */
+-         case 'l':  /* file's lock status */
+-         case 'L':  /* process login name */
+-         case 'p':  /* process ID */
+-         case 'P':  /* protocol name */
+-         case 'R':  /* parent process ID */
+-         case 'T':  /* TCP/TPI information, identified by prefixes */
+-         case 'u':  /* process user ID */
+-            /* ignore */
+-            break;
+-      }
+-
+-      if (cmd == 's')
+-         lsofIncludesFileSize = true;
+-
+-      free(line);
+-   }
+-   fclose(fp);
+-
+-   int wstatus;
+-   while (waitpid(child, &wstatus, 0) == -1)
+-      if (errno != EINTR) {
+-         pdata->error = 1;
+-         return pdata;
+-      }
+-
+-   if (!WIFEXITED(wstatus)) {
+-      pdata->error = 1;
+-   } else {
+-      pdata->error = WEXITSTATUS(wstatus);
+-   }
+-
+-   /* We got all information we need; no post-processing needed */
+-   if (lsofIncludesFileSize)
+-      return pdata;
+-
+-   /* On linux, `lsof -o -F` omits SIZE, so add it back. */
+-   /* On macOS, `lsof -o -F` includes SIZE, so this block isn't needed.  If no open files have a filesize, this will still run, unfortunately. */
+-   size_t fileSizeIndex = getIndexForType('s');
+-   for (fdata = pdata->files; fdata != NULL; fdata = fdata->next) {
+-      item = &fdata->data;
+-      const char* filename = getDataForType(item, 'n');
+-
+-      struct stat sb;
+-      if (stat(filename, &sb) == 0) {
+-         char fileSizeBuf[21]; /* 20 (long long) + 1 (NULL) */
+-         xSnprintf(fileSizeBuf, sizeof(fileSizeBuf), "%"PRIu64, (uint64_t)sb.st_size); /* sb.st_size is long long on macOS, long on linux */
+-         free_and_xStrdup(&item->data[fileSizeIndex], fileSizeBuf);
+-      }
+-   }
+-
+-   return pdata;
+-}
+-
+-static void OpenFiles_Data_clear(OpenFiles_Data* data) {
+-   for (size_t i = 0; i < ARRAYSIZE(data->data); i++)
+-      free(data->data[i]);
+-}
+-
+-static void OpenFilesScreen_scan(InfoScreen* super) {
+-   Panel* panel = super->display;
+-   int idx = Panel_getSelectedIndex(panel);
+-   Panel_prune(panel);
+-   OpenFiles_ProcessData* pdata = OpenFilesScreen_getProcessData(((OpenFilesScreen*)super)->pid);
+-   if (pdata->error == 127) {
+-      InfoScreen_addLine(super, "Could not execute 'lsof'. Please make sure it is available in your $PATH.");
+-   } else if (pdata->error == 1) {
+-      InfoScreen_addLine(super, "Failed listing open files.");
+-   } else {
+-      char hdrbuf[128] = {0};
+-      snprintf(hdrbuf, sizeof(hdrbuf), "%5.5s %-7.7s %-4.4s %6.6s %*s %*s %*s  %s",
+-         "FD", "TYPE", "MODE", "DEVICE",
+-         pdata->cols[getIndexForType('s')], "SIZE",
+-         pdata->cols[getIndexForType('o')], "OFFSET",
+-         pdata->cols[getIndexForType('i')], "NODE",
+-         "NAME"
+-      );
+-      Panel_setHeader(panel, hdrbuf);
+-
+-      OpenFiles_FileData* fdata = pdata->files;
+-      while (fdata) {
+-         OpenFiles_Data* data = &fdata->data;
+-         char* entry = NULL;
+-         xAsprintf(&entry, "%5.5s %-7.7s %-4.4s %6.6s %*s %*s %*s  %s",
+-                   getDataForType(data, 'f'),
+-                   getDataForType(data, 't'),
+-                   getDataForType(data, 'a'),
+-                   getDataForType(data, 'D'),
+-                   pdata->cols[getIndexForType('s')],
+-                   getDataForType(data, 's'),
+-                   pdata->cols[getIndexForType('o')],
+-                   getDataForType(data, 'o'),
+-                   pdata->cols[getIndexForType('i')],
+-                   getDataForType(data, 'i'),
+-                   getDataForType(data, 'n'));
+-         InfoScreen_addLine(super, entry);
+-         free(entry);
+-         OpenFiles_Data_clear(data);
+-         OpenFiles_FileData* old = fdata;
+-         fdata = fdata->next;
+-         free(old);
+-      }
+-      OpenFiles_Data_clear(&pdata->data);
+-   }
+-   free(pdata);
+-   Vector_insertionSort(super->lines);
+-   Vector_insertionSort(panel->items);
+-   Panel_setSelected(panel, idx);
+-}
+-
+-const InfoScreenClass OpenFilesScreen_class = {
+-   .super = {
+-      .extends = Class(Object),
+-      .delete = OpenFilesScreen_delete
+-   },
+-   .scan = OpenFilesScreen_scan,
+-   .draw = OpenFilesScreen_draw
+-};
++﻿/*
++htop - OpenFilesScreen.c
++(C) 2005-2006 Hisham H. Muhammad
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++#include "CRT.h"
++
++#include "OpenFilesScreen.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <inttypes.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++#include <sys/types.h>
++#include <sys/wait.h>
++#include <sys/stat.h>
++
++#include "Macros.h"
++#include "Panel.h"
++#include "ProvideCurses.h"
++#include "Vector.h"
++#include "XUtils.h"
++
++
++// cf. getIndexForType; must be larger than the maximum value returned.
++#define LSOF_DATACOL_COUNT 8
++
++typedef struct OpenFiles_Data_ {
++   char* data[LSOF_DATACOL_COUNT];
++} OpenFiles_Data;
++
++typedef struct OpenFiles_ProcessData_ {
++   OpenFiles_Data data;
++   int error;
++   int cols[LSOF_DATACOL_COUNT];
++   struct OpenFiles_FileData_* files;
++} OpenFiles_ProcessData;
++
++typedef struct OpenFiles_FileData_ {
++   OpenFiles_Data data;
++   struct OpenFiles_FileData_* next;
++} OpenFiles_FileData;
++
++static size_t getIndexForType(char type) {
++   switch (type) {
++      case 'f':
++         return 0;
++      case 'a':
++         return 1;
++      case 'D':
++         return 2;
++      case 'i':
++         return 3;
++      case 'n':
++         return 4;
++      case 's':
++         return 5;
++      case 't':
++         return 6;
++      case 'o':
++         return 7;
++   }
++
++   /* should never reach here */
++   abort();
++}
++
++static const char* getDataForType(const OpenFiles_Data* data, char type) {
++   size_t index = getIndexForType(type);
++   return data->data[index] ? data->data[index] : "";
++}
++
++OpenFilesScreen* OpenFilesScreen_new(const Process* process) {
++   OpenFilesScreen* this = xCalloc(1, sizeof(OpenFilesScreen));
++   Object_setClass(this, Class(OpenFilesScreen));
++   if (Process_isThread(process)) {
++      this->pid = Process_getThreadGroup(process);
++   } else {
++      this->pid = Process_getPid(process);
++   }
++   return (OpenFilesScreen*) InfoScreen_init(&this->super, process, NULL, LINES - 2, "   FD TYPE    MODE DEVICE           SIZE     OFFSET       NODE  NAME");
++}
++
++void OpenFilesScreen_delete(Object* this) {
++   free(InfoScreen_done((InfoScreen*)this));
++}
++
++static void OpenFilesScreen_draw(InfoScreen* this) {
++   InfoScreen_drawTitled(this, CRT_trans("Snapshot of files open in process %d - %s"), ((OpenFilesScreen*)this)->pid, Process_getCommand(this->process));
++}
++
++static OpenFiles_ProcessData* OpenFilesScreen_getProcessData(pid_t pid) {
++   OpenFiles_ProcessData* pdata = xCalloc(1, sizeof(OpenFiles_ProcessData));
++   pdata->cols[getIndexForType('s')] = 8;
++   pdata->cols[getIndexForType('o')] = 8;
++   pdata->cols[getIndexForType('i')] = 8;
++
++   int fdpair[2] = {0, 0};
++   if (pipe(fdpair) == -1) {
++      pdata->error = 1;
++      return pdata;
++   }
++
++   pid_t child = fork();
++   if (child == -1) {
++      close(fdpair[1]);
++      close(fdpair[0]);
++      pdata->error = 1;
++      return pdata;
++   }
++
++   if (child == 0) {
++      close(fdpair[0]);
++      dup2(fdpair[1], STDOUT_FILENO);
++      close(fdpair[1]);
++      int fdnull = open("/dev/null", O_WRONLY);
++      if (fdnull < 0) {
++         exit(1);
++      }
++
++      dup2(fdnull, STDERR_FILENO);
++      close(fdnull);
++      char buffer[32] = {0};
++      xSnprintf(buffer, sizeof(buffer), "%d", pid);
++      // Use of NULL in variadic functions must have a pointer cast.
++      // The NULL constant is not required by standard to have a pointer type.
++      execlp("lsof", "lsof", "-P", "-o", "-p", buffer, "-F", (char*)NULL);
++      exit(127);
++   }
++   close(fdpair[1]);
++
++   OpenFiles_Data* item = &(pdata->data);
++   OpenFiles_FileData* fdata = NULL;
++   bool lsofIncludesFileSize = false;
++
++   FILE* fp = fdopen(fdpair[0], "r");
++   if (!fp) {
++      pdata->error = 1;
++      return pdata;
++   }
++   for (;;) {
++      char* line = String_readLine(fp);
++      if (!line) {
++         break;
++      }
++
++      unsigned char cmd = line[0];
++      switch (cmd) {
++         case 'f':  /* file descriptor */
++         {
++            OpenFiles_FileData* nextFile = xCalloc(1, sizeof(OpenFiles_FileData));
++            if (fdata == NULL) {
++               pdata->files = nextFile;
++            } else {
++               fdata->next = nextFile;
++            }
++            fdata = nextFile;
++            item = &(fdata->data);
++         } /* FALLTHRU */
++         case 'a':  /* file access mode */
++         case 'D':  /* file's major/minor device number */
++         case 'i':  /* file's inode number */
++         case 'n':  /* file name, comment, Internet address */
++         case 's':  /* file's size */
++         case 't':  /* file's type */
++         {
++            size_t index = getIndexForType(cmd);
++            free_and_xStrdup(&item->data[index], line + 1);
++            size_t dlen = strlen(item->data[index]);
++            if (dlen > (size_t)pdata->cols[index]) {
++               pdata->cols[index] = (int)CLAMP(dlen, 0, INT16_MAX);
++            }
++            break;
++         }
++         case 'o':  /* file's offset */
++         {
++            size_t index = getIndexForType(cmd);
++            if (String_startsWith(line + 1, "0t")) {
++               free_and_xStrdup(&item->data[index], line + 3);
++            } else {
++               free_and_xStrdup(&item->data[index], line + 1);
++            }
++            size_t dlen = strlen(item->data[index]);
++            if (dlen > (size_t)pdata->cols[index]) {
++               pdata->cols[index] = (int)CLAMP(dlen, 0, INT16_MAX);
++            }
++            break;
++         }
++         case 'c':  /* process command name  */
++         case 'd':  /* file's device character code */
++         case 'g':  /* process group ID */
++         case 'G':  /* file flags */
++         case 'k':  /* link count */
++         case 'l':  /* file's lock status */
++         case 'L':  /* process login name */
++         case 'p':  /* process ID */
++         case 'P':  /* protocol name */
++         case 'R':  /* parent process ID */
++         case 'T':  /* TCP/TPI information, identified by prefixes */
++         case 'u':  /* process user ID */
++            /* ignore */
++            break;
++      }
++
++      if (cmd == 's')
++         lsofIncludesFileSize = true;
++
++      free(line);
++   }
++   fclose(fp);
++
++   int wstatus;
++   while (waitpid(child, &wstatus, 0) == -1)
++      if (errno != EINTR) {
++         pdata->error = 1;
++         return pdata;
++      }
++
++   if (!WIFEXITED(wstatus)) {
++      pdata->error = 1;
++   } else {
++      pdata->error = WEXITSTATUS(wstatus);
++   }
++
++   /* We got all information we need; no post-processing needed */
++   if (lsofIncludesFileSize)
++      return pdata;
++
++   /* On linux, `lsof -o -F` omits SIZE, so add it back. */
++   /* On macOS, `lsof -o -F` includes SIZE, so this block isn't needed.  If no open files have a filesize, this will still run, unfortunately. */
++   size_t fileSizeIndex = getIndexForType('s');
++   for (fdata = pdata->files; fdata != NULL; fdata = fdata->next) {
++      item = &fdata->data;
++      const char* filename = getDataForType(item, 'n');
++
++      struct stat sb;
++      if (stat(filename, &sb) == 0) {
++         char fileSizeBuf[21]; /* 20 (long long) + 1 (NULL) */
++         xSnprintf(fileSizeBuf, sizeof(fileSizeBuf), "%"PRIu64, (uint64_t)sb.st_size); /* sb.st_size is long long on macOS, long on linux */
++         free_and_xStrdup(&item->data[fileSizeIndex], fileSizeBuf);
++      }
++   }
++
++   return pdata;
++}
++
++static void OpenFiles_Data_clear(OpenFiles_Data* data) {
++   for (size_t i = 0; i < ARRAYSIZE(data->data); i++)
++      free(data->data[i]);
++}
++
++static void OpenFilesScreen_scan(InfoScreen* super) {
++   Panel* panel = super->display;
++   int idx = Panel_getSelectedIndex(panel);
++   Panel_prune(panel);
++   OpenFiles_ProcessData* pdata = OpenFilesScreen_getProcessData(((OpenFilesScreen*)super)->pid);
++   if (pdata->error == 127) {
++      InfoScreen_addLine(super, CRT_trans("Could not execute 'lsof'. Please make sure it is available in your $PATH."));
++   } else if (pdata->error == 1) {
++      InfoScreen_addLine(super, CRT_trans("Failed listing open files."));
++   } else {
++      char hdrbuf[128] = {0};
++      snprintf(hdrbuf, sizeof(hdrbuf), "%5.5s %-7.7s %-4.4s %6.6s %*s %*s %*s  %s",
++         "FD", "TYPE", "MODE", "DEVICE",
++         pdata->cols[getIndexForType('s')], "SIZE",
++         pdata->cols[getIndexForType('o')], "OFFSET",
++         pdata->cols[getIndexForType('i')], "NODE",
++         "NAME"
++      );
++      Panel_setHeader(panel, hdrbuf);
++
++      OpenFiles_FileData* fdata = pdata->files;
++      while (fdata) {
++         OpenFiles_Data* data = &fdata->data;
++         char* entry = NULL;
++         xAsprintf(&entry, "%5.5s %-7.7s %-4.4s %6.6s %*s %*s %*s  %s",
++                   getDataForType(data, 'f'),
++                   getDataForType(data, 't'),
++                   getDataForType(data, 'a'),
++                   getDataForType(data, 'D'),
++                   pdata->cols[getIndexForType('s')],
++                   getDataForType(data, 's'),
++                   pdata->cols[getIndexForType('o')],
++                   getDataForType(data, 'o'),
++                   pdata->cols[getIndexForType('i')],
++                   getDataForType(data, 'i'),
++                   getDataForType(data, 'n'));
++         InfoScreen_addLine(super, entry);
++         free(entry);
++         OpenFiles_Data_clear(data);
++         OpenFiles_FileData* old = fdata;
++         fdata = fdata->next;
++         free(old);
++      }
++      OpenFiles_Data_clear(&pdata->data);
++   }
++   free(pdata);
++   Vector_insertionSort(super->lines);
++   Vector_insertionSort(panel->items);
++   Panel_setSelected(panel, idx);
++}
++
++const InfoScreenClass OpenFilesScreen_class = {
++   .super = {
++      .extends = Class(Object),
++      .delete = OpenFilesScreen_delete
++   },
++   .scan = OpenFilesScreen_scan,
++   .draw = OpenFilesScreen_draw
++};
+--- a/ProcessLocksScreen.c
++++ b/ProcessLocksScreen.c
+@@ -1,106 +1,107 @@
+-/*
+-htop - ProcessLocksScreen.c
+-(C) 2020 htop dev team
+-Released under the GNU GPLv2+, see the COPYING file
+-in the source distribution for its full text.
+-*/
+-
+-#include "config.h" // IWYU pragma: keep
+-
+-#include "ProcessLocksScreen.h"
+-
+-#include <inttypes.h>
+-#include <limits.h>
+-#include <stdlib.h>
+-
+-#include "Panel.h"
+-#include "Platform.h"
+-#include "ProvideCurses.h"
+-#include "Vector.h"
+-#include "XUtils.h"
+-
+-
+-ProcessLocksScreen* ProcessLocksScreen_new(const Process* process) {
+-   ProcessLocksScreen* this = xMalloc(sizeof(ProcessLocksScreen));
+-   Object_setClass(this, Class(ProcessLocksScreen));
+-   if (Process_isThread(process))
+-      this->pid = Process_getThreadGroup(process);
+-   else
+-      this->pid = Process_getPid(process);
+-
+-   return (ProcessLocksScreen*) InfoScreen_init(&this->super, process, NULL, LINES - 2, "   FD TYPE       EXCLUSION  READ/WRITE DEVICE       NODE               START                 END  FILENAME");
+-}
+-
+-void ProcessLocksScreen_delete(Object* this) {
+-   free(InfoScreen_done((InfoScreen*)this));
+-}
+-
+-static void ProcessLocksScreen_draw(InfoScreen* this) {
+-   InfoScreen_drawTitled(this, "Snapshot of file locks of process %d - %s", ((ProcessLocksScreen*)this)->pid, Process_getCommand(this->process));
+-}
+-
+-static inline void FileLocks_Data_clear(FileLocks_Data* data) {
+-   free(data->locktype);
+-   free(data->exclusive);
+-   free(data->readwrite);
+-   free(data->filename);
+-}
+-
+-static void ProcessLocksScreen_scan(InfoScreen* this) {
+-   Panel* panel = this->display;
+-   int idx = Panel_getSelectedIndex(panel);
+-   Panel_prune(panel);
+-   FileLocks_ProcessData* pdata = Platform_getProcessLocks(((ProcessLocksScreen*)this)->pid);
+-   if (!pdata) {
+-      InfoScreen_addLine(this, "This feature is not supported on your platform.");
+-   } else if (pdata->error) {
+-      InfoScreen_addLine(this, "Could not determine file locks.");
+-   } else {
+-      FileLocks_LockData* ldata = pdata->locks;
+-      if (!ldata) {
+-         InfoScreen_addLine(this, "No locks have been found for the selected process.");
+-      }
+-      while (ldata) {
+-         FileLocks_Data* data = &ldata->data;
+-
+-         char entry[512];
+-         if (ULLONG_MAX == data->end) {
+-            xSnprintf(entry, sizeof(entry), "%5d %-10s %-10s %-10s %#6"PRIx64" %10"PRIu64" %19"PRIu64" %19s  %s",
+-               data->fd,
+-               data->locktype, data->exclusive, data->readwrite,
+-               (uint64_t) data->dev, data->inode,
+-               data->start, "<END OF FILE>",
+-               data->filename ? data->filename : "<N/A>"
+-            );
+-         } else {
+-            xSnprintf(entry, sizeof(entry), "%5d %-10s %-10s %-10s %#6"PRIx64" %10"PRIu64" %19"PRIu64" %19"PRIu64"  %s",
+-               data->fd,
+-               data->locktype, data->exclusive, data->readwrite,
+-               (uint64_t) data->dev, data->inode,
+-               data->start, data->end,
+-               data->filename ? data->filename : "<N/A>"
+-            );
+-         }
+-
+-         InfoScreen_addLine(this, entry);
+-         FileLocks_Data_clear(&ldata->data);
+-
+-         FileLocks_LockData* old = ldata;
+-         ldata = ldata->next;
+-         free(old);
+-      }
+-   }
+-   free(pdata);
+-   Vector_insertionSort(this->lines);
+-   Vector_insertionSort(panel->items);
+-   Panel_setSelected(panel, idx);
+-}
+-
+-const InfoScreenClass ProcessLocksScreen_class = {
+-   .super = {
+-      .extends = Class(Object),
+-      .delete = ProcessLocksScreen_delete
+-   },
+-   .scan = ProcessLocksScreen_scan,
+-   .draw = ProcessLocksScreen_draw
+-};
++﻿/*
++htop - ProcessLocksScreen.c
++(C) 2020 htop dev team
++Released under the GNU GPLv2+, see the COPYING file
++in the source distribution for its full text.
++*/
++
++#include "config.h" // IWYU pragma: keep
++#include "CRT.h"
++
++#include "ProcessLocksScreen.h"
++
++#include <inttypes.h>
++#include <limits.h>
++#include <stdlib.h>
++
++#include "Panel.h"
++#include "Platform.h"
++#include "ProvideCurses.h"
++#include "Vector.h"
++#include "XUtils.h"
++
++
++ProcessLocksScreen* ProcessLocksScreen_new(const Process* process) {
++   ProcessLocksScreen* this = xMalloc(sizeof(ProcessLocksScreen));
++   Object_setClass(this, Class(ProcessLocksScreen));
++   if (Process_isThread(process))
++      this->pid = Process_getThreadGroup(process);
++   else
++      this->pid = Process_getPid(process);
++
++   return (ProcessLocksScreen*) InfoScreen_init(&this->super, process, NULL, LINES - 2, "   FD TYPE       EXCLUSION  READ/WRITE DEVICE       NODE               START                 END  FILENAME");
++}
++
++void ProcessLocksScreen_delete(Object* this) {
++   free(InfoScreen_done((InfoScreen*)this));
++}
++
++static void ProcessLocksScreen_draw(InfoScreen* this) {
++   InfoScreen_drawTitled(this, CRT_trans("Snapshot of file locks of process %d - %s"), ((ProcessLocksScreen*)this)->pid, Process_getCommand(this->process));
++}
++
++static inline void FileLocks_Data_clear(FileLocks_Data* data) {
++   free(data->locktype);
++   free(data->exclusive);
++   free(data->readwrite);
++   free(data->filename);
++}
++
++static void ProcessLocksScreen_scan(InfoScreen* this) {
++   Panel* panel = this->display;
++   int idx = Panel_getSelectedIndex(panel);
++   Panel_prune(panel);
++   FileLocks_ProcessData* pdata = Platform_getProcessLocks(((ProcessLocksScreen*)this)->pid);
++   if (!pdata) {
++      InfoScreen_addLine(this, CRT_trans("This feature is not supported on your platform."));
++   } else if (pdata->error) {
++      InfoScreen_addLine(this, CRT_trans("Could not determine file locks."));
++   } else {
++      FileLocks_LockData* ldata = pdata->locks;
++      if (!ldata) {
++         InfoScreen_addLine(this, CRT_trans("No locks have been found for the selected process."));
++      }
++      while (ldata) {
++         FileLocks_Data* data = &ldata->data;
++
++         char entry[512];
++         if (ULLONG_MAX == data->end) {
++            xSnprintf(entry, sizeof(entry), "%5d %-10s %-10s %-10s %#6"PRIx64" %10"PRIu64" %19"PRIu64" %19s  %s",
++               data->fd,
++               data->locktype, data->exclusive, data->readwrite,
++               (uint64_t) data->dev, data->inode,
++               data->start, "<END OF FILE>",
++               data->filename ? data->filename : "<N/A>"
++            );
++         } else {
++            xSnprintf(entry, sizeof(entry), "%5d %-10s %-10s %-10s %#6"PRIx64" %10"PRIu64" %19"PRIu64" %19"PRIu64"  %s",
++               data->fd,
++               data->locktype, data->exclusive, data->readwrite,
++               (uint64_t) data->dev, data->inode,
++               data->start, data->end,
++               data->filename ? data->filename : "<N/A>"
++            );
++         }
++
++         InfoScreen_addLine(this, entry);
++         FileLocks_Data_clear(&ldata->data);
++
++         FileLocks_LockData* old = ldata;
++         ldata = ldata->next;
++         free(old);
++      }
++   }
++   free(pdata);
++   Vector_insertionSort(this->lines);
++   Vector_insertionSort(panel->items);
++   Panel_setSelected(panel, idx);
++}
++
++const InfoScreenClass ProcessLocksScreen_class = {
++   .super = {
++      .extends = Class(Object),
++      .delete = ProcessLocksScreen_delete
++   },
++   .scan = ProcessLocksScreen_scan,
++   .draw = ProcessLocksScreen_draw
++};
+--- a/ScreenTabsPanel.c
++++ b/ScreenTabsPanel.c
+@@ -1,4 +1,4 @@
+-/*
++﻿/*
+ htop - ScreenTabsPanel.c
+ (C) 2023 htop dev team
+ Released under the GNU GPLv2+, see the COPYING file
+@@ -148,7 +148,7 @@
+    Panel_setHeader(super, "Screen tabs");
+ 
+    assert(settings->dynamicScreens != NULL);
+-   Panel_add(super, (Object*) ScreenTabListItem_new("Processes", NULL));
++   Panel_add(super, (Object*) ScreenTabListItem_new(CRT_trans("Processes"), NULL));
+    Hashtable_foreach(settings->dynamicScreens, addDynamicScreen, super);
+ 
+    return this;

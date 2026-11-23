@@ -1,0 +1,61 @@
+name: build-static
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: alpine:3.20
+    steps:
+      - name: 安装构建依赖
+        run: |
+          apk add --no-cache build-base ncurses-dev ncurses-static \
+            autoconf automake libtool pkgconf linux-headers curl tar
+
+      - uses: actions/checkout@v4
+
+      - name: 下载 htop 源码并打补丁
+        run: |
+          curl -fsSL -o /tmp/htop.tar.gz \
+            https://codeload.github.com/htop-dev/htop/tar.gz/refs/tags/3.4.1
+          mkdir -p /tmp/src
+          tar xzf /tmp/htop.tar.gz -C /tmp/src --strip-components=1
+          cd /tmp/src
+          patch -p1 < "$GITHUB_WORKSPACE/patch/htop-3.4.1-zh.patch"
+
+      - name: 静态编译
+        run: |
+          cd /tmp/src
+          sh autogen.sh
+          ./configure --enable-unicode LDFLAGS=-static
+          make -j"$(nproc)"
+          strip htop
+          cp htop "$GITHUB_WORKSPACE/htop-zh-3.4.1-x86_64-static"
+          "$GITHUB_WORKSPACE/htop-zh-3.4.1-x86_64-static" --version
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: htop-zh-static
+          path: htop-zh-3.4.1-x86_64-static
+
+      - name: 发布 Release（仅在打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: htop-zh-3.4.1-x86_64-static
+          body: |
+            htop 3.4.1 中文化版本（x86_64 Linux 静态二进制）。
+
+            ```bash
+            chmod +x htop-zh-3.4.1-x86_64-static
+            sudo install -m 755 htop-zh-3.4.1-x86_64-static /usr/local/bin/htop-zh
+            HTOP_LANG=zh htop-zh
+            ```
