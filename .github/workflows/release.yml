@@ -15,38 +15,61 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: alpine:3.20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
+          - arch: armhf
+            platform: linux/arm/v7
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装构建依赖
-        run: |
-          apk add --no-cache build-base ncurses-dev ncurses-static \
-            autoconf automake libtool pkgconf linux-headers curl tar
-
-      - name: 下载 htop 源码并打补丁
+      - name: 准备 htop 源码
         run: |
           curl -fsSL -o /tmp/htop.tar.gz \
             "https://codeload.github.com/htop-dev/htop/tar.gz/refs/tags/${HTOP_VERSION}"
-          mkdir -p /tmp/src
-          tar xzf /tmp/htop.tar.gz -C /tmp/src --strip-components=1
-          cd /tmp/src
+          mkdir -p source
+          tar xzf /tmp/htop.tar.gz -C source --strip-components=1
+          cd source
           patch -p1 < "$GITHUB_WORKSPACE/patch/htop-${HTOP_VERSION}-zh.patch"
 
-      - name: 静态编译
+      - name: 注册 QEMU（用于交叉架构编译）
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,arm/v7
+
+      - name: 在 ${{ matrix.arch }} 容器中静态编译
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
-          cd /tmp/src
-          sh autogen.sh
-          ./configure --enable-unicode LDFLAGS=-static
-          make -j"$(nproc)"
-          strip htop
-          cp htop "$GITHUB_WORKSPACE/htop-zh-${HTOP_VERSION}-x86_64-static"
-          "$GITHUB_WORKSPACE/htop-zh-${HTOP_VERSION}-x86_64-static" --version
+          set -e
+          mkdir -p out
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD":/src -w /src/source \
+            -e ARCH="$ARCH" \
+            alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache build-base ncurses-dev ncurses-static \
+                autoconf automake libtool pkgconf linux-headers curl tar
+              sh autogen.sh
+              ./configure --enable-unicode LDFLAGS=-static
+              make -j"$(nproc)"
+              strip htop
+              cp htop "/src/out/htop-zh-${ARCH}-static"
+              file htop || true
+            '
+          ls -l out/
+          sudo chown -R "$(id -u):$(id -g)" out
+          chmod +x "out/htop-zh-${ARCH}-static"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: htop-zh-static
-          path: htop-zh-*-x86_64-static
+          name: htop-zh-${{ matrix.arch }}
+          path: out/htop-zh-${{ matrix.arch }}-static
 
   publish:
     needs: build
@@ -56,53 +79,69 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: htop-zh-static
+          pattern: htop-zh-*
           path: dist
+          merge-multiple: true
 
       - name: 构建 .deb 与 APT 索引
         run: |
           set -e
-          BIN=$(find dist -name 'htop-zh-*-static' | head -1)
-          chmod +x "$BIN"
           VER="${HTOP_VERSION}-${GITHUB_RUN_NUMBER}"
-
-          mkdir -p apt/usr/bin apt/DEBIAN
-          install -m 755 "$BIN" apt/usr/bin/htop-zh
-          sed "s/^Version: .*/Version: $VER/" packaging/control > apt/DEBIAN/control
-          chmod 644 apt/DEBIAN/control
-
-          DEB="htop-zh_${VER}_amd64.deb"
-          dpkg-deb --build --root-owner-group apt "$DEB"
-          dpkg-deb -c "$DEB"
-
           mkdir -p repo
-          mv "$DEB" repo/
-          cp "$BIN" repo/
+
+          for bin in dist/htop-zh-*-static; do
+            arch=$(basename "$bin" | sed -E 's/^htop-zh-(.*)-static$/\1/')
+            case "$arch" in
+              amd64|arm64|armhf) ;;
+              *) echo "跳过未知架构: $arch"; continue ;;
+            esac
+            echo "== 打包 $arch =="
+
+            rm -rf pkg
+            mkdir -p pkg/DEBIAN pkg/usr/bin
+            install -m 755 "$bin" pkg/usr/bin/htop-zh
+            sed -e "s/^Version: .*/Version: $VER/" \
+                -e "s/^Architecture: .*/Architecture: $arch/" \
+                packaging/control > pkg/DEBIAN/control
+            chmod 644 pkg/DEBIAN/control
+
+            DEB="htop-zh_${VER}_${arch}.deb"
+            dpkg-deb --build --root-owner-group pkg "repo/$DEB" > /dev/null
+            dpkg-deb -c "repo/$DEB"
+            cp "$bin" "repo/$(basename "$bin")"
+          done
 
           cd repo
-          {
-            echo "Package: htop-zh"
-            echo "Version: $VER"
-            echo "Architecture: amd64"
-            echo "Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>"
-            echo "Installed-Size: 556"
-            echo "Depends:"
-            echo "Section: utils"
-            echo "Priority: optional"
-            echo "Filename: ./$DEB"
-            echo "Size: $(stat -c%s "$DEB")"
-            echo "SHA256: $(sha256sum "$DEB" | cut -d' ' -f1)"
-            echo "Description: htop with Simplified Chinese user interface"
-            echo " htop ${HTOP_VERSION} patched with a Simplified Chinese interface, covering"
-            echo " the main screen, the help page, the setup screens and the common dialogs."
-            echo " ."
-            echo " The included binary is statically linked (musl) and needs no runtime"
-            echo " dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the"
-            echo " Chinese interface, HTOP_LANG=en keeps the original English UI."
-          } > Packages
+          : > Packages
+          for deb in htop-zh_*_*.deb; do
+            arch=$(echo "$deb" | sed -E 's/^htop-zh_.*_(.*)\.deb$/\1/')
+            {
+              echo "Package: htop-zh"
+              echo "Version: $VER"
+              echo "Architecture: $arch"
+              echo "Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>"
+              echo "Installed-Size: 556"
+              echo "Depends:"
+              echo "Section: utils"
+              echo "Priority: optional"
+              echo "Filename: ./$deb"
+              echo "Size: $(stat -c%s "$deb")"
+              echo "SHA256: $(sha256sum "$deb" | cut -d' ' -f1)"
+              echo "Description: htop with Simplified Chinese user interface"
+              echo " htop ${HTOP_VERSION} patched with a Simplified Chinese interface, covering"
+              echo " the main screen, the help page, the setup screens and the common dialogs."
+              echo " ."
+              echo " The included binary is statically linked (musl) and needs no runtime"
+              echo " dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the"
+              echo " Chinese interface, HTOP_LANG=en keeps the original English UI."
+              echo ""
+            } >> Packages
+          done
           gzip -kf Packages
           touch .nojekyll
           ls -l
+          echo "---- Packages ----"
+          head -40 Packages
 
       - name: 发布到 gh-pages（APT 源）
         uses: peaceiris/actions-gh-pages@v4
@@ -117,12 +156,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            repo/htop-zh_*_amd64.deb
-            repo/htop-zh-*-x86_64-static
+            repo/htop-zh_*_*.deb
+            repo/htop-zh-*-static
           body: |
-            htop ${{ env.HTOP_VERSION }} 中文化版本。
+            htop ${{ env.HTOP_VERSION }} 中文化版本，提供三种架构：
 
-            ## 方式一：APT 安装（推荐）
+            | 架构 | 适用设备 |
+            |---|---|
+            | amd64 | 普通 x86_64 服务器 / PC |
+            | arm64 | 树莓派 3/4/5（64 位系统）、ARM 服务器 |
+            | armhf | 树莓派 2/3/4（32 位系统，armv7） |
+
+            ## APT 安装（Debian / Ubuntu / Raspberry Pi OS）
 
             ```bash
             echo "deb [trusted=yes] https://jj11510163-hash.github.io/htop-zh/ ./" | sudo tee /etc/apt/sources.list.d/htop-zh.list
@@ -130,13 +175,13 @@ jobs:
             sudo apt install htop-zh
             ```
 
-            ## 方式二：下载安装
+            ## 直接下载
 
             ```bash
-            sudo apt install ./htop-zh_*_amd64.deb
-            # 或直接跑静态二进制
-            chmod +x htop-zh-*-x86_64-static
-            sudo install -m 755 htop-zh-*-x86_64-static /usr/local/bin/htop-zh
+            sudo apt install ./htop-zh_*_<arch>.deb
+            # 或直接运行静态二进制
+            chmod +x htop-zh-<arch>-static
+            sudo install -m 755 htop-zh-<arch>-static /usr/local/bin/htop-zh
             ```
 
             运行：`HTOP_LANG=zh htop-zh`

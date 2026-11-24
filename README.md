@@ -8,7 +8,9 @@
 
 ## 安装
 
-### APT 源（Debian / Ubuntu）
+支持三种架构：**amd64**（普通 x86_64 服务器/PC）、**arm64**（树莓派 3/4/5 的 64 位系统、ARM 服务器）、**armhf**（树莓派 2/3/4 的 32 位系统，armv7）。
+
+### APT 源（Debian / Ubuntu / Raspberry Pi OS）
 
 ```bash
 echo "deb [trusted=yes] https://jj11510163-hash.github.io/htop-zh/ ./" | sudo tee /etc/apt/sources.list.d/htop-zh.list
@@ -17,18 +19,32 @@ sudo apt install htop-zh
 HTOP_LANG=zh htop-zh
 ```
 
+apt 会自动选择与当前机器架构匹配的包，树莓派上无需额外操作。
+
 ### 下载 .deb 直接安装
 
 ```bash
-sudo apt install ./htop-zh_3.4.1-1_amd64.deb
+# 从 Releases 下载对应架构，例如 arm64 版
+sudo apt install ./htop-zh_*_arm64.deb
+# 或 amd64 / armhf
+sudo apt install ./htop-zh_*_amd64.deb
+sudo apt install ./htop-zh_*_armhf.deb
 ```
 
 ### 静态二进制
 
 ```bash
-chmod +x htop-zh-3.4.1-x86_64-static
-sudo install -m 755 htop-zh-3.4.1-x86_64-static /usr/local/bin/htop-zh
+chmod +x htop-zh-<arch>-static
+sudo install -m 755 htop-zh-<arch>-static /usr/local/bin/htop-zh
 ```
+
+`<arch>` 取 `amd64`、`arm64` 或 `armhf`，用 `uname -m` 确认：
+
+| `uname -m` | 用哪个包 |
+|---|---|
+| `x86_64` | amd64 |
+| `aarch64` | arm64 |
+| `armv7l` | armhf |
 
 ## 效果
 
