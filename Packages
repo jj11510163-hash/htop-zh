@@ -1,0 +1,57 @@
+Package: htop-zh
+Version: 3.4.1-5
+Architecture: amd64
+Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>
+Installed-Size: 556
+Depends:
+Section: utils
+Priority: optional
+Filename: ./htop-zh_3.4.1-5_amd64.deb
+Size: 257150
+SHA256: cfbc176a0a8c76a258657068787840768063ab6a4b18f8600cc8aa1a5048508a
+Description: htop with Simplified Chinese user interface
+ htop 3.4.1 patched with a Simplified Chinese interface, covering
+ the main screen, the help page, the setup screens and the common dialogs.
+ .
+ The included binary is statically linked (musl) and needs no runtime
+ dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the
+ Chinese interface, HTOP_LANG=en keeps the original English UI.
+
+Package: htop-zh
+Version: 3.4.1-5
+Architecture: arm64
+Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>
+Installed-Size: 556
+Depends:
+Section: utils
+Priority: optional
+Filename: ./htop-zh_3.4.1-5_arm64.deb
+Size: 265942
+SHA256: 63e5c8560a44aca26547b53a019f8709877efa071d7549a20562aa76e176948a
+Description: htop with Simplified Chinese user interface
+ htop 3.4.1 patched with a Simplified Chinese interface, covering
+ the main screen, the help page, the setup screens and the common dialogs.
+ .
+ The included binary is statically linked (musl) and needs no runtime
+ dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the
+ Chinese interface, HTOP_LANG=en keeps the original English UI.
+
+Package: htop-zh
+Version: 3.4.1-5
+Architecture: armhf
+Maintainer: Mizukiii <286423403+jj11510163-hash@users.noreply.github.com>
+Installed-Size: 556
+Depends:
+Section: utils
+Priority: optional
+Filename: ./htop-zh_3.4.1-5_armhf.deb
+Size: 239278
+SHA256: baa3875279176f7a3824eb8d104a0ff56642828ad7601eea4180a9abefed6c5f
+Description: htop with Simplified Chinese user interface
+ htop 3.4.1 patched with a Simplified Chinese interface, covering
+ the main screen, the help page, the setup screens and the common dialogs.
+ .
+ The included binary is statically linked (musl) and needs no runtime
+ dependencies. Use HTOP_LANG=zh (or an UTF-8 Chinese locale) for the
+ Chinese interface, HTOP_LANG=en keeps the original English UI.
+
