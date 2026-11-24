@@ -1,4 +1,4 @@
-name: build-and-publish
+﻿name: build-and-publish
 
 on:
   push:
@@ -40,7 +40,7 @@ jobs:
       - name: 注册 QEMU（用于交叉架构编译）
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: arm64,arm/v7
+          platforms: arm64,arm
 
       - name: 在 ${{ matrix.arch }} 容器中静态编译
         env:
